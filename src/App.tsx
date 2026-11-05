@@ -263,6 +263,20 @@ export default function App() {
     }
   }, [video, isUpscaling, isProcessingPreview, settings]);
 
+  // Open Before/After Comparison view for upscaled video
+  const handleCompareResult = useCallback(() => {
+    if (!video || !completedPath) return;
+    const scale = settings.targetResolution === "4k" ? 4 : 2;
+    setPreviewMedia({
+      originalUrl: video.srcUrl,
+      enhancedUrl: convertFileSrc(completedPath),
+      outputWidth: video.width * scale,
+      outputHeight: video.height * scale,
+    });
+    setIsModalOpen(false);
+    setIsPlaying(true);
+  }, [video, completedPath, settings.targetResolution]);
+
   // Cancel running pipeline
   const handleCancel = useCallback(async () => {
     try {
@@ -354,6 +368,8 @@ export default function App() {
         onRunPreview={handleRunPreview}
         isUpscaling={isUpscaling}
         onStartUpscale={handleStartUpscale}
+        completedPath={completedPath}
+        onOpenFinder={handleOpenFinder}
       />
 
       {/* Real-time Progress HUD / Modal */}
@@ -365,10 +381,15 @@ export default function App() {
         error={renderError}
         onCancel={handleCancel}
         onOpenFinder={handleOpenFinder}
+        onCompareResult={handleCompareResult}
         onClose={() => {
-          setIsModalOpen(false);
-          setCompletedPath(null);
-          setRenderError(null);
+          if (completedPath) {
+            handleCompareResult();
+          } else {
+            setIsModalOpen(false);
+            setCompletedPath(null);
+            setRenderError(null);
+          }
         }}
       />
     </div>

@@ -11,6 +11,7 @@ import {
   Sparkles,
   Undo2,
   Zap,
+  FolderOpen,
 } from "lucide-react";
 import { PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
@@ -34,6 +35,8 @@ interface WorkspaceIslandProps {
   onRunPreview: () => void;
   isUpscaling: boolean;
   onStartUpscale: () => void;
+  completedPath?: string | null;
+  onOpenFinder?: (path: string) => void;
 }
 
 export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
@@ -56,6 +59,8 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   onRunPreview,
   isUpscaling,
   onStartUpscale,
+  completedPath,
+  onOpenFinder,
 }) => {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -106,10 +111,23 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
     }
   };
 
+  const handlePreviewTimeUpdate = () => {
+    if (originalPreviewRef.current) {
+      onSeek(originalPreviewRef.current.currentTime);
+    }
+    handlePreviewSync();
+  };
+
   const handleSeekVideo = (newTime: number) => {
     onSeek(newTime);
-    if (!previewMedia && sourceVideoRef.current) {
+    if (sourceVideoRef.current) {
       sourceVideoRef.current.currentTime = newTime;
+    }
+    if (originalPreviewRef.current) {
+      originalPreviewRef.current.currentTime = newTime;
+    }
+    if (enhancedPreviewRef.current) {
+      enhancedPreviewRef.current.currentTime = newTime;
     }
   };
 
@@ -256,13 +274,24 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
             {/* Quality Switcher & Close */}
             <div className="flex items-center space-x-2">
               {previewMedia ? (
-                <button
-                  onClick={onClearPreview}
-                  className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 hover:text-white text-[11px] font-medium flex items-center space-x-1 border border-white/[0.08] transition-all"
-                >
-                  <Undo2 className="w-3 h-3 text-zinc-400" />
-                  <span>Exit 3s Preview</span>
-                </button>
+                <>
+                  {completedPath && onOpenFinder && (
+                    <button
+                      onClick={() => onOpenFinder(completedPath)}
+                      className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 hover:text-white text-[11px] font-medium flex items-center space-x-1.5 border border-white/[0.08] transition-all"
+                    >
+                      <FolderOpen className="w-3 h-3 text-zinc-400" />
+                      <span>Show in Finder</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={onClearPreview}
+                    className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 hover:text-white text-[11px] font-medium flex items-center space-x-1 border border-white/[0.08] transition-all"
+                  >
+                    <Undo2 className="w-3 h-3 text-zinc-400" />
+                    <span>Exit Comparison</span>
+                  </button>
+                </>
               ) : (
                 <div className="flex items-center space-x-1 p-0.5 rounded-lg bg-black/40 border border-white/[0.06]">
                   <button
@@ -315,12 +344,12 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     muted
                     playsInline
                     autoPlay
-                    onTimeUpdate={handlePreviewSync}
+                    onTimeUpdate={handlePreviewTimeUpdate}
                     className="w-full h-full object-contain pointer-events-none"
                   />
                 </div>
 
-                {/* AFTER (AI Enhanced 3s Clip, clipped by sliderPos) */}
+                {/* AFTER (AI Enhanced Video, clipped by sliderPos) */}
                 <div
                   className="absolute inset-0 flex items-center justify-center bg-black overflow-hidden"
                   style={{
@@ -360,29 +389,47 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   </span>
                 </div>
 
-                {/* Floating Glass Pill for Preview Transport */}
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 backdrop-blur-xl border border-white/10 px-3 py-1.5 flex items-center gap-3 shadow-2xl z-20">
+                {/* Floating Glass Pill for Comparison Transport */}
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/80 backdrop-blur-xl border border-white/10 px-3.5 py-1.5 flex items-center gap-3 shadow-2xl z-20 cursor-default"
+                >
                   <button
                     onClick={onTogglePlay}
-                    className="w-6 h-6 rounded-full bg-white text-zinc-950 flex items-center justify-center shadow hover:bg-zinc-200 active:scale-95 transition-all"
+                    className="w-7 h-7 rounded-full bg-white text-zinc-950 flex items-center justify-center shadow hover:bg-zinc-200 active:scale-95 transition-all flex-shrink-0"
                     title="Play/Pause (Space)"
                   >
                     {isPlaying ? (
-                      <Pause className="w-3 h-3 fill-current" />
+                      <Pause className="w-3.5 h-3.5 fill-current" />
                     ) : (
-                      <Play className="w-3 h-3 fill-current ml-0.5" />
+                      <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
                     )}
                   </button>
 
-                  <span className="font-mono text-[10.5px] text-zinc-300">
-                    3s Loop Comparison
-                  </span>
+                  {/* Scrubber slider to scrub across the whole video in sync */}
+                  <div className="flex items-center space-x-2.5">
+                    <input
+                      type="range"
+                      min={0}
+                      max={video.duration || 100}
+                      step={0.1}
+                      value={currentTime}
+                      onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
+                      className="w-48 pro-slider"
+                    />
+                    <span className="font-mono text-[11px] text-zinc-300 tabular-nums">
+                      {formatTimecode(currentTime)} / {formatTimecode(video.duration)}
+                    </span>
+                  </div>
+
+                  <div className="w-[1px] h-4 bg-white/15" />
 
                   <button
                     onClick={onClearPreview}
                     className="text-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/[0.08] transition-colors"
+                    title="Return to original video"
                   >
-                    Back to Video
+                    Exit
                   </button>
                 </div>
               </div>

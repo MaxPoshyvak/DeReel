@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, FolderOpen, X, AlertCircle } from "lucide-react";
+import { CheckCircle2, FolderOpen, X, AlertCircle, Sparkles } from "lucide-react";
 import { RenderProgressPayload } from "../types";
 
 interface ProgressModalProps {
@@ -11,6 +11,7 @@ interface ProgressModalProps {
   onCancel: () => void;
   onOpenFinder: (path: string) => void;
   onClose: () => void;
+  onCompareResult: () => void;
 }
 
 export const ProgressModal: React.FC<ProgressModalProps> = ({
@@ -22,6 +23,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
   onCancel,
   onOpenFinder,
   onClose,
+  onCompareResult,
 }) => {
   if (!isOpen) return null;
 
@@ -69,17 +71,17 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
               </h3>
               <p className="text-[11px] text-zinc-400 font-mono">
                 {isDone
-                  ? "Ready to view and play"
+                  ? "Ready to compare Before & After"
                   : error
                   ? error
-                  : progress?.stage || "Initializing pipeline..."}
+                  : progress?.stage || "Processing with Apple GPU..."}
               </p>
             </div>
           </div>
 
           {(isDone || error) && (
             <button
-              onClick={onClose}
+              onClick={isDone ? onCompareResult : onClose}
               className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.06] transition-colors"
             >
               <X className="w-4 h-4" />
@@ -91,7 +93,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
         {!isDone && !error && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-zinc-400 text-[11px]">Processing on Apple GPU</span>
+              <span className="text-zinc-400 text-[11px]">Processing on Apple GPU (M4)</span>
               <span className="text-[#38BDF8] font-bold text-sm tabular-nums">
                 {percent.toFixed(0)}%
               </span>
@@ -100,7 +102,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
             {/* Track */}
             <div className="w-full h-2 rounded-full bg-black/60 border border-white/[0.06] overflow-hidden p-0.5">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] transition-all duration-300 shadow-[0_0_12px_rgba(56,189,248,0.5)]"
+                className="h-full rounded-full bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] transition-all duration-300 ease-out shadow-[0_0_12px_rgba(56,189,248,0.5)]"
                 style={{ width: `${percent}%` }}
               />
             </div>
@@ -117,7 +119,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
               <div className="px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/[0.04]">
                 <div className="text-[9px] font-mono text-zinc-500 uppercase">Speed</div>
                 <div className="text-xs font-mono text-zinc-300 font-medium tabular-nums mt-0.5">
-                  {progress?.fps ? `${progress.fps.toFixed(1)} FPS` : "-- FPS"}
+                  {progress?.fps && progress.fps > 0 ? `${progress.fps.toFixed(1)} FPS` : "-- FPS"}
                 </div>
               </div>
 
@@ -144,17 +146,18 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => onOpenFinder(completedPath)}
-                className="flex-1 py-2 px-3 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-zinc-200 hover:text-white text-xs font-medium flex items-center justify-center space-x-2 border border-white/[0.08] transition-all"
+                className="py-2.5 px-3.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-zinc-200 hover:text-white text-xs font-medium flex items-center justify-center space-x-1.5 border border-white/[0.08] transition-all"
               >
                 <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Show in Finder</span>
               </button>
 
               <button
-                onClick={onClose}
-                className="flex-1 py-2 px-3 rounded-xl bg-[#38BDF8] hover:bg-sky-400 text-zinc-950 font-semibold text-xs flex items-center justify-center transition-all shadow-md"
+                onClick={onCompareResult}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs flex items-center justify-center space-x-2 transition-all shadow-[0_0_15px_-3px_rgba(56,189,248,0.4)]"
               >
-                Done
+                <Sparkles className="w-3.5 h-3.5 fill-current" />
+                <span>Compare Before & After</span>
               </button>
             </div>
           </div>

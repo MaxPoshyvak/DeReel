@@ -45,6 +45,9 @@ struct FFprobeStream {
     codec_name: Option<String>,
     duration: Option<String>,
     r_frame_rate: Option<String>,
+    avg_frame_rate: Option<String>,
+    #[allow(dead_code)]
+    field_order: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -113,19 +116,24 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
         .and_then(|s| s.codec_name.clone())
         .unwrap_or_else(|| "h264".to_string());
 
-    let fps = video_stream
-        .and_then(|s| s.r_frame_rate.as_ref())
-        .and_then(|rate| {
-            let parts: Vec<&str> = rate.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().ok()?;
-                let den: f64 = parts[1].parse().ok()?;
-                if den > 0.0 {
-                    return Some(num / den);
-                }
+    let parse_rate = |rate_opt: Option<&String>| -> Option<f64> {
+        let rate = rate_opt?;
+        let parts: Vec<&str> = rate.split('/').collect();
+        if parts.len() == 2 {
+            let num: f64 = parts[0].parse().ok()?;
+            let den: f64 = parts[1].parse().ok()?;
+            if den > 0.0 && num > 0.0 {
+                return Some(num / den);
             }
-            rate.parse().ok()
-        })
+        }
+        rate.parse().ok()
+    };
+
+    // Prefer avg_frame_rate up to 60fps; avoid 120fps display refresh rate of screen recordings
+    let fps = video_stream
+        .and_then(|s| parse_rate(s.avg_frame_rate.as_ref()))
+        .filter(|&f| f > 0.0 && f <= 60.0)
+        .or_else(|| video_stream.and_then(|s| parse_rate(s.r_frame_rate.as_ref())))
         .unwrap_or(29.97);
 
     let duration: f64 = video_stream
@@ -190,7 +198,7 @@ where
     });
 
     let filter_arg = if deinterlace {
-        "bwdif=mode=send_frame"
+        "bwdif=mode=send_frame:deint=interlaced"
     } else {
         "null"
     };
@@ -205,10 +213,14 @@ where
             "3.0",
             "-i",
             input_path,
+            "-fps_mode",
+            "passthrough",
             "-vf",
             filter_arg,
             "-c:v",
             "h264_videotoolbox",
+            "-tag:v",
+            "avc1",
             "-b:v",
             "6M",
             "-pix_fmt",
@@ -231,8 +243,8 @@ where
         return Err("Operation cancelled by user".to_string());
     }
 
-    // 2. Extract frames for neural inference
-    let frame_pattern = frames_in_dir.join("frame_%04d.png");
+    // 2. Extract frames for neural inference with fast high-quality JPEG
+    let frame_pattern = frames_in_dir.join("frame_%04d.jpg");
     let mut extract_frames = Command::new("ffmpeg")
         .args([
             "-y",
@@ -242,8 +254,12 @@ where
             "3.0",
             "-i",
             input_path,
+            "-fps_mode",
+            "passthrough",
             "-vf",
             filter_arg,
+            "-q:v",
+            "1",
             frame_pattern.to_str().unwrap(),
         ])
         .spawn()
@@ -257,7 +273,8 @@ where
     // Count extracted frames
     let frame_count = fs::read_dir(&frames_in_dir)
         .map(|r| r.count() as u32)
-        .unwrap_or(72);
+        .unwrap_or(72)
+        .max(1);
 
     progress(RenderProgress {
         stage: "AI Upscaling on Apple Silicon GPU...".to_string(),
@@ -265,7 +282,7 @@ where
         current_frame: 0,
         total_frames: frame_count,
         fps: 0.0,
-        eta_seconds: 10,
+        eta_seconds: 5,
     });
 
     // Stage 2: Run Real-ESRGAN on Apple GPU with live progress parsing
@@ -286,12 +303,18 @@ where
             models_dir.to_str().unwrap(),
             "-n",
             "realesr-animevideov3",
+            "-j",
+            "2:2:2",
+            "-f",
+            "jpg",
         ])
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
     let start_time = Instant::now();
+    let mut last_progress_pct = 15.0;
+
     if let Some(stderr) = ai_child.stderr.take() {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
@@ -301,38 +324,46 @@ where
                 return Err("Operation cancelled by user".to_string());
             }
 
-            if line.contains('%') {
-                if let Some(pct_str) = line
-                    .split('%')
+            let completed = fs::read_dir(&frames_out_dir)
+                .map(|r| r.count() as u32)
+                .unwrap_or(0);
+
+            let pct_in_frame = if line.contains('%') {
+                line.split('%')
                     .next()
                     .and_then(|s| s.split_whitespace().last())
-                {
-                    if let Ok(pct) = pct_str.parse::<f64>() {
-                        let overall_pct = 15.0 + (pct / 100.0) * 70.0;
-                        let elapsed = start_time.elapsed().as_secs_f64();
-                        let current_f = ((pct / 100.0) * frame_count as f64) as u32;
-                        let fps = if elapsed > 0.0 {
-                            current_f as f64 / elapsed
-                        } else {
-                            0.0
-                        };
-                        let eta = if fps > 0.0 && current_f < frame_count {
-                            ((frame_count - current_f) as f64 / fps) as u32
-                        } else {
-                            0
-                        };
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
 
-                        progress(RenderProgress {
-                            stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", pct),
-                            percent: overall_pct,
-                            current_frame: current_f,
-                            total_frames: frame_count,
-                            fps,
-                            eta_seconds: eta,
-                        });
-                    }
-                }
-            }
+            let frame_progress =
+                (completed as f64 + (pct_in_frame / 100.0)).min(frame_count as f64);
+            let calculated_pct = 15.0 + (frame_progress / frame_count as f64) * 70.0;
+            let overall_pct = calculated_pct.max(last_progress_pct);
+            last_progress_pct = overall_pct;
+
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let fps = if elapsed > 0.5 {
+                completed as f64 / elapsed
+            } else {
+                0.0
+            };
+            let eta = if fps > 0.1 && completed < frame_count {
+                ((frame_count - completed) as f64 / fps) as u32
+            } else {
+                0
+            };
+
+            progress(RenderProgress {
+                stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", overall_pct),
+                percent: overall_pct,
+                current_frame: completed.min(frame_count),
+                total_frames: frame_count,
+                fps,
+                eta_seconds: eta,
+            });
         }
     }
 
@@ -344,14 +375,14 @@ where
     // Stage 3: Encode upscaled frames using hardware VideoToolbox
     progress(RenderProgress {
         stage: "Encoding VideoToolbox hardware stream...".to_string(),
-        percent: 88.0,
+        percent: 92.0,
         current_frame: frame_count,
         total_frames: frame_count,
         fps: 30.0,
-        eta_seconds: 2,
+        eta_seconds: 1,
     });
 
-    let out_pattern = frames_out_dir.join("frame_%04d.png");
+    let out_pattern = frames_out_dir.join("frame_%04d.jpg");
     let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
 
     let mut encode_run = Command::new("ffmpeg")
@@ -363,6 +394,8 @@ where
             out_pattern.to_str().unwrap(),
             "-c:v",
             "h264_videotoolbox",
+            "-tag:v",
+            "avc1",
             "-b:v",
             "12M",
             "-pix_fmt",
@@ -436,7 +469,7 @@ where
     fs::create_dir_all(&frames_out_dir).map_err(|e| e.to_string())?;
 
     let filter_arg = if deinterlace {
-        "bwdif=mode=send_frame"
+        "bwdif=mode=send_frame:deint=interlaced"
     } else {
         "null"
     };
@@ -449,17 +482,21 @@ where
         current_frame: 0,
         total_frames: total_est_frames,
         fps: 0.0,
-        eta_seconds: 30,
+        eta_seconds: 15,
     });
 
-    let frame_pattern = frames_in_dir.join("frame_%06d.png");
+    let frame_pattern = frames_in_dir.join("frame_%06d.jpg");
     let mut extract_child = Command::new("ffmpeg")
         .args([
             "-y",
             "-i",
             input_path,
+            "-fps_mode",
+            "passthrough",
             "-vf",
             filter_arg,
+            "-q:v",
+            "1",
             frame_pattern.to_str().unwrap(),
         ])
         .spawn()
@@ -478,7 +515,8 @@ where
 
     let actual_frames = fs::read_dir(&frames_in_dir)
         .map(|r| r.count() as u32)
-        .unwrap_or(total_est_frames);
+        .unwrap_or(total_est_frames)
+        .max(1);
 
     progress(RenderProgress {
         stage: "AI Super-Resolution on Apple GPU...".to_string(),
@@ -486,7 +524,7 @@ where
         current_frame: 0,
         total_frames: actual_frames,
         fps: 0.0,
-        eta_seconds: (actual_frames as f64 / 15.0) as u32,
+        eta_seconds: (actual_frames as f64 / 2.0) as u32,
     });
 
     let bin_dir = get_binary_path();
@@ -506,12 +544,18 @@ where
             models_dir.to_str().unwrap(),
             "-n",
             "realesr-animevideov3",
+            "-j",
+            "2:2:2",
+            "-f",
+            "jpg",
         ])
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
     let start_time = Instant::now();
+    let mut last_progress_pct = 10.0;
+
     if let Some(stderr) = ai_child.stderr.take() {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
@@ -521,38 +565,46 @@ where
                 return Err("Upscale cancelled by user".to_string());
             }
 
-            if line.contains('%') {
-                if let Some(pct_str) = line
-                    .split('%')
+            let completed = fs::read_dir(&frames_out_dir)
+                .map(|r| r.count() as u32)
+                .unwrap_or(0);
+
+            let pct_in_frame = if line.contains('%') {
+                line.split('%')
                     .next()
                     .and_then(|s| s.split_whitespace().last())
-                {
-                    if let Ok(pct) = pct_str.parse::<f64>() {
-                        let overall_pct = 10.0 + (pct / 100.0) * 80.0;
-                        let elapsed = start_time.elapsed().as_secs_f64();
-                        let current_f = ((pct / 100.0) * actual_frames as f64) as u32;
-                        let fps = if elapsed > 0.0 {
-                            current_f as f64 / elapsed
-                        } else {
-                            0.0
-                        };
-                        let eta = if fps > 0.0 && current_f < actual_frames {
-                            ((actual_frames - current_f) as f64 / fps) as u32
-                        } else {
-                            0
-                        };
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
 
-                        progress(RenderProgress {
-                            stage: format!("AI Upscaling on Apple GPU — {:.1}%", pct),
-                            percent: overall_pct,
-                            current_frame: current_f,
-                            total_frames: actual_frames,
-                            fps,
-                            eta_seconds: eta,
-                        });
-                    }
-                }
-            }
+            let frame_progress =
+                (completed as f64 + (pct_in_frame / 100.0)).min(actual_frames as f64);
+            let calculated_pct = 10.0 + (frame_progress / actual_frames as f64) * 82.0;
+            let overall_pct = calculated_pct.max(last_progress_pct);
+            last_progress_pct = overall_pct;
+
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let fps = if elapsed > 1.0 {
+                completed as f64 / elapsed
+            } else {
+                0.0
+            };
+            let eta = if fps > 0.1 && completed < actual_frames {
+                ((actual_frames - completed) as f64 / fps) as u32
+            } else {
+                0
+            };
+
+            progress(RenderProgress {
+                stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", overall_pct),
+                percent: overall_pct,
+                current_frame: completed.min(actual_frames),
+                total_frames: actual_frames,
+                fps,
+                eta_seconds: eta,
+            });
         }
     }
 
@@ -564,15 +616,15 @@ where
 
     // Stage 3: Hardware encode back to MP4 with original audio stream remuxed
     progress(RenderProgress {
-        stage: "Encoding VideoToolbox 4K Stream with audio...".to_string(),
-        percent: 92.0,
+        stage: "Encoding VideoToolbox hardware stream...".to_string(),
+        percent: 94.0,
         current_frame: actual_frames,
         total_frames: actual_frames,
         fps: 40.0,
-        eta_seconds: 5,
+        eta_seconds: 2,
     });
 
-    let out_pattern = frames_out_dir.join("frame_%06d.png");
+    let out_pattern = frames_out_dir.join("frame_%06d.jpg");
     let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
 
     let mut encode_run = Command::new("ffmpeg")
@@ -590,12 +642,15 @@ where
             "1:a?", // copy audio if stream exists
             "-c:v",
             "h264_videotoolbox",
+            "-tag:v",
+            "avc1",
             "-b:v",
             "16M",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "copy",
+            "-shortest",
             final_dest.to_str().unwrap(),
         ])
         .spawn()
