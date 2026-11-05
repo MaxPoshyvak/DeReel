@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Upload,
   Play,
@@ -10,7 +10,7 @@ import {
   Clock,
   Sparkles
 } from "lucide-react";
-import { PresetSettings, VideoMetadata } from "../types";
+import { PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
 interface WorkspaceIslandProps {
   video: VideoMetadata | null;
@@ -26,7 +26,7 @@ interface WorkspaceIslandProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   isProcessingPreview: boolean;
-  hasPreview: boolean;
+  previewMedia: PreviewMedia | null;
   onRunPreview: () => void;
   isExporting: boolean;
   onExport: () => void;
@@ -46,7 +46,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   isPlaying,
   onTogglePlay,
   isProcessingPreview,
-  hasPreview,
+  previewMedia,
   onRunPreview,
   isExporting,
   onExport
@@ -55,6 +55,31 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingSlider = useRef(false);
+
+  const originalVideoRef = useRef<HTMLVideoElement>(null);
+  const enhancedVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Synchronize both preview videos when playing
+  useEffect(() => {
+    if (originalVideoRef.current && enhancedVideoRef.current) {
+      if (isPlaying) {
+        originalVideoRef.current.play().catch(() => {});
+        enhancedVideoRef.current.play().catch(() => {});
+      } else {
+        originalVideoRef.current.pause();
+        enhancedVideoRef.current.pause();
+      }
+    }
+  }, [isPlaying, previewMedia]);
+
+  const handleTimeUpdate = () => {
+    if (originalVideoRef.current && enhancedVideoRef.current) {
+      const diff = Math.abs(originalVideoRef.current.currentTime - enhancedVideoRef.current.currentTime);
+      if (diff > 0.05) {
+        enhancedVideoRef.current.currentTime = originalVideoRef.current.currentTime;
+      }
+    }
+  };
 
   const formatTimecode = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -104,7 +129,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   };
 
   const handleDrag = (e: React.MouseEvent) => {
-    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a")) {
+    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, video")) {
       try {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
           getCurrentWindow().startDragging();
@@ -164,7 +189,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
               }}
               className="text-xs text-zinc-400 hover:text-white font-medium flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-all"
             >
-              <span>Try with sample VHS tape</span>
+              <span>Try with sample video</span>
               <ArrowRight className="w-3 h-3 text-zinc-500" />
             </button>
           </div>
@@ -192,7 +217,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
               </div>
 
               <span className="font-mono text-[11px] text-zinc-500">
-                {video.width}×{video.height} SD @ {video.fps} FPS
+                {video.width}×{video.height} SD @ {video.fps.toFixed(1)} FPS
               </span>
             </div>
 
@@ -237,42 +262,83 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
               ref={containerRef}
               className="w-full h-full relative overflow-hidden select-none flex items-center justify-center"
             >
-              {/* Before Layer (Original Analog Footage) */}
-              <div className="absolute inset-0 flex items-center justify-center bg-[#09090c]">
-                <div
-                  className="absolute inset-0 pointer-events-none opacity-20"
-                  style={{
-                    backgroundImage:
-                      "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.8) 3px, rgba(0,0,0,0.8) 4px)"
-                  }}
-                />
-                <div className="text-center p-6 select-none">
-                  <div className="text-5xl opacity-40 mb-2">📼</div>
-                  <div className="text-xs font-mono text-zinc-500 uppercase tracking-widest font-semibold">
-                    Original (480i)
+              {previewMedia ? (
+                /* REAL SPLIT-SCREEN VIDEO PLAYER */
+                <>
+                  {/* BEFORE (Original 3s Video) */}
+                  <div className="absolute inset-0 flex items-center justify-center bg-black">
+                    <video
+                      ref={originalVideoRef}
+                      src={previewMedia.originalUrl}
+                      loop
+                      muted
+                      playsInline
+                      onTimeUpdate={handleTimeUpdate}
+                      className="w-full h-full object-contain pointer-events-none"
+                    />
                   </div>
-                </div>
-              </div>
 
-              {/* After Layer (Restored, clipped by sliderPos) */}
-              <div
-                className="absolute inset-0 flex items-center justify-center bg-[#131318] overflow-hidden"
-                style={{
-                  clipPath: `inset(0 0 0 ${sliderPos}%)`
-                }}
-              >
-                <div className="text-center p-6 select-none">
-                  <div className="text-5xl text-[#38BDF8] drop-shadow-[0_0_24px_rgba(56,189,248,0.35)] mb-2">
-                    ✨
+                  {/* AFTER (AI Enhanced 3s Video, clipped by sliderPos) */}
+                  <div
+                    className="absolute inset-0 flex items-center justify-center bg-black overflow-hidden"
+                    style={{
+                      clipPath: `inset(0 0 0 ${sliderPos}%)`
+                    }}
+                  >
+                    <video
+                      ref={enhancedVideoRef}
+                      src={previewMedia.enhancedUrl}
+                      loop
+                      muted
+                      playsInline
+                      className="w-full h-full object-contain pointer-events-none"
+                    />
                   </div>
-                  <div className="text-xs font-mono text-sky-200 uppercase tracking-widest font-semibold flex items-center justify-center space-x-1.5">
-                    <span>AI Restored ({settings.targetResolution.toUpperCase()})</span>
-                    {hasPreview && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    )}
+                </>
+              ) : (
+                /* PLACEHOLDER BEFORE RENDERING PREVIEW */
+                <>
+                  {/* Before Layer (Original Analog Footage preview) */}
+                  <div className="absolute inset-0 flex items-center justify-center bg-[#09090c]">
+                    <div
+                      className="absolute inset-0 pointer-events-none opacity-20"
+                      style={{
+                        backgroundImage:
+                          "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.8) 3px, rgba(0,0,0,0.8) 4px)"
+                      }}
+                    />
+                    <div className="text-center p-6 select-none">
+                      <div className="text-5xl opacity-40 mb-2">📼</div>
+                      <div className="text-xs font-mono text-zinc-500 uppercase tracking-widest font-semibold">
+                        Original ({video.width}×{video.height})
+                      </div>
+                      <div className="text-[11px] text-zinc-600 mt-2">
+                        Click "Render 3s Preview" below to run Apple Silicon Neural Engine & GPU
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+
+                  {/* After Layer (Simulated preview) */}
+                  <div
+                    className="absolute inset-0 flex items-center justify-center bg-[#131318] overflow-hidden"
+                    style={{
+                      clipPath: `inset(0 0 0 ${sliderPos}%)`
+                    }}
+                  >
+                    <div className="text-center p-6 select-none">
+                      <div className="text-5xl text-[#38BDF8] drop-shadow-[0_0_24px_rgba(56,189,248,0.35)] mb-2">
+                        ✨
+                      </div>
+                      <div className="text-xs font-mono text-sky-200 uppercase tracking-widest font-semibold">
+                        AI Restored ({settings.targetResolution.toUpperCase()})
+                      </div>
+                      <div className="text-[11px] text-zinc-500 mt-2">
+                        Ready for instant GPU preview
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Split Hairline Divider & Handle */}
               <div
@@ -287,11 +353,15 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
 
               {/* Floating Top Badges */}
               <div className="absolute top-3 left-3 px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10 text-[10.5px] font-mono text-zinc-400 pointer-events-none">
-                Original (480i)
+                Original ({video.width}×{video.height})
               </div>
               <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-[#18181D]/80 backdrop-blur-md border border-white/15 text-[10.5px] font-mono text-[#38BDF8] pointer-events-none flex items-center space-x-1">
                 <Sparkles className="w-3 h-3 text-[#38BDF8]" />
-                <span>AI Restored ({settings.targetResolution.toUpperCase()})</span>
+                <span>
+                  {previewMedia
+                    ? `AI Restored (${previewMedia.outputWidth}×${previewMedia.outputHeight})`
+                    : `AI Restored (${settings.targetResolution.toUpperCase()})`}
+                </span>
               </div>
 
               {/* Floating Glass Pill Docked Bottom Center */}
@@ -333,16 +403,19 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   ) : (
                     <span>⚡</span>
                   )}
-                  <span>{isProcessingPreview ? "Rendering..." : "Render 3s Preview"}</span>
+                  <span>{isProcessingPreview ? "Generating..." : "Render 3s Preview"}</span>
                 </button>
               </div>
 
               {/* Processing Shimmer Overlay */}
               {isProcessingPreview && (
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center space-y-2 z-40">
+                <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center space-y-2.5 z-40">
                   <div className="w-6 h-6 rounded-full border-2 border-[#38BDF8] border-t-transparent animate-spin" />
                   <div className="text-xs font-semibold text-zinc-200">
-                    Generating 3-Second Preview...
+                    Running Apple Silicon GPU & Neural Engine...
+                  </div>
+                  <div className="text-[10.5px] font-mono text-zinc-500">
+                    bwdif deinterlacing • Real-ESRGAN SPAN • VideoToolbox encode
                   </div>
                 </div>
               )}
@@ -358,7 +431,9 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   Output
                 </div>
                 <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  {settings.targetResolution === "4k" ? "3840 × 2160" : "1920 × 1440"}
+                  {settings.targetResolution === "4k"
+                    ? `${video.width * 4} × ${video.height * 4}`
+                    : `${video.width * 2} × ${video.height * 2}`}
                 </div>
               </div>
 
@@ -367,7 +442,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   Frame Rate
                 </div>
                 <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  29.97 → 59.94
+                  {video.fps.toFixed(1)} FPS
                 </div>
               </div>
 
@@ -376,7 +451,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   Est. Time
                 </div>
                 <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  ~01m 24s
+                  ~00m 15s (3s)
                 </div>
               </div>
             </div>
@@ -390,7 +465,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
               {isExporting ? (
                 <>
                   <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                  <span>42% • 34.2 FPS</span>
+                  <span>Exporting...</span>
                 </>
               ) : (
                 <>

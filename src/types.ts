@@ -24,3 +24,10 @@ export interface VideoMetadata {
   height: number;
   codec: string;
 }
+
+export interface PreviewMedia {
+  originalUrl: string;
+  enhancedUrl: string;
+  outputWidth: number;
+  outputHeight: number;
+}

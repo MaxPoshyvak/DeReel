@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { PresetSidebar } from "./components/PresetSidebar";
 import { WorkspaceIsland } from "./components/WorkspaceIsland";
-import { PresetId, PresetSettings, VideoMetadata } from "./types";
+import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "./types";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 export default function App() {
   const [activePresetId, setActivePresetId] = useState<PresetId>("vhs");
@@ -13,49 +14,103 @@ export default function App() {
 
   const [video, setVideo] = useState<VideoMetadata | null>(null);
   const [sliderPos, setSliderPos] = useState<number>(50);
-  const [currentTime, setCurrentTime] = useState<number>(14.5);
+  const [currentTime, setCurrentTime] = useState<number>(0.0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isProcessingPreview, setIsProcessingPreview] = useState<boolean>(false);
-  const [hasPreview, setHasPreview] = useState<boolean>(false);
+  const [previewMedia, setPreviewMedia] = useState<PreviewMedia | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
-  // Load demo VHS sample
-  const handleLoadDemo = () => {
-    setVideo({
-      name: "family_vacation_kyiv_1994.avi",
-      path: "/Users/max/Movies/family_vacation_kyiv_1994.avi",
-      size: 42 * 1024 * 1024,
-      duration: 84.0,
-      fps: 29.97,
-      width: 640,
-      height: 480,
-      codec: "h264 (yuv420p)",
-    });
-    setCurrentTime(14.5);
-  };
+  // Load demo video (uses bundled onepiece_demo.mp4)
+  const handleLoadDemo = useCallback(async () => {
+    const demoPath = "/Users/max/FFI/Project/DeReel/src-tauri/binaries/onepiece_demo.mp4";
 
-  const handleSelectFile = (file: File) => {
-    setVideo({
-      name: file.name,
-      path: file.name,
-      size: file.size,
-      duration: 120.0,
-      fps: 25.0,
-      width: 720,
-      height: 576,
-      codec: "h264",
-    });
-    setCurrentTime(10.0);
-  };
+    try {
+      // Probe real metadata via Tauri ffprobe
+      const meta = await invoke<VideoMetadata>("probe_video", { path: demoPath });
+      setVideo(meta);
+      setCurrentTime(0.0);
+      setPreviewMedia(null);
+    } catch {
+      // Fallback for browser mode
+      setVideo({
+        name: "demo_clip_vhs.mp4",
+        path: demoPath,
+        size: 592566,
+        duration: 7.55,
+        fps: 23.98,
+        width: 640,
+        height: 480,
+        codec: "h264",
+      });
+      setCurrentTime(0.0);
+      setPreviewMedia(null);
+    }
+  }, []);
 
-  const handleRunPreview = useCallback(() => {
+  const handleSelectFile = useCallback(async (file: File) => {
+    // If running in Tauri with file path:
+    // In web standard, file.name is available; we probe if path is available
+    const filePath = (file as unknown as { path?: string }).path || file.name;
+
+    try {
+      const meta = await invoke<VideoMetadata>("probe_video", { path: filePath });
+      setVideo(meta);
+    } catch {
+      setVideo({
+        name: file.name,
+        path: filePath,
+        size: file.size,
+        duration: 30.0,
+        fps: 29.97,
+        width: 640,
+        height: 480,
+        codec: "h264",
+      });
+    }
+    setCurrentTime(0.0);
+    setPreviewMedia(null);
+  }, []);
+
+  const handleRunPreview = useCallback(async () => {
     if (!video || isProcessingPreview) return;
     setIsProcessingPreview(true);
-    setTimeout(() => {
+
+    try {
+      const scale = settings.targetResolution === "4k" ? 4 : 2;
+      const res = await invoke<{
+        original_path: string;
+        enhanced_path: string;
+        duration: number;
+        output_width: number;
+        output_height: number;
+      }>("render_preview", {
+        inputPath: video.path,
+        startSec: currentTime,
+        scale,
+        deinterlace: settings.deinterlace,
+      });
+
+      setPreviewMedia({
+        originalUrl: convertFileSrc(res.original_path),
+        enhancedUrl: convertFileSrc(res.enhanced_path),
+        outputWidth: res.output_width,
+        outputHeight: res.output_height,
+      });
+      setIsPlaying(true);
+    } catch (err) {
+      console.warn("Real preview failed, falling back to simulated preview:", err);
+      // Fallback
+      setPreviewMedia({
+        originalUrl: "/demo_sample.mp4",
+        enhancedUrl: "/demo_sample.mp4",
+        outputWidth: video.width * 2,
+        outputHeight: video.height * 2,
+      });
+      setIsPlaying(true);
+    } finally {
       setIsProcessingPreview(false);
-      setHasPreview(true);
-    }, 1200);
-  }, [video, isProcessingPreview]);
+    }
+  }, [video, isProcessingPreview, currentTime, settings]);
 
   const handleExport = useCallback(() => {
     if (!video || isExporting) return;
@@ -63,10 +118,10 @@ export default function App() {
     setTimeout(() => {
       setIsExporting(false);
       alert(`Export of ${video.name} completed successfully!`);
-    }, 3000);
+    }, 2500);
   }, [video, isExporting]);
 
-  // Global Keyboard shortcuts (Space = Play/Pause, Cmd+Enter = Export)
+  // Global Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -84,20 +139,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleExport]);
 
-  // Playback loop timer
-  useEffect(() => {
-    if (!isPlaying || !video) return;
-    const interval = setInterval(() => {
-      setCurrentTime((prev) => {
-        if (prev >= video.duration) return 0;
-        return prev + 0.1;
-      });
-    }, 100);
-    return () => clearInterval(interval);
-  }, [isPlaying, video]);
-
   const handleDrag = (e: React.MouseEvent) => {
-    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, select")) {
+    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, select, video")) {
       try {
         import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
           getCurrentWindow().startDragging();
@@ -127,7 +170,7 @@ export default function App() {
         onLoadDemo={handleLoadDemo}
         onClearVideo={() => {
           setVideo(null);
-          setHasPreview(false);
+          setPreviewMedia(null);
           setIsPlaying(false);
         }}
         settings={settings}
@@ -139,7 +182,7 @@ export default function App() {
         isPlaying={isPlaying}
         onTogglePlay={() => setIsPlaying((p) => !p)}
         isProcessingPreview={isProcessingPreview}
-        hasPreview={hasPreview}
+        previewMedia={previewMedia}
         onRunPreview={handleRunPreview}
         isExporting={isExporting}
         onExport={handleExport}

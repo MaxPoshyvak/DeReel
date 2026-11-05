@@ -19,6 +19,8 @@ lerna-debug.log*
 # Tauri & Rust artifacts
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/
+public/demo_sample.mp4
 **/*.rs.bk
 
 # Editor & OS files
