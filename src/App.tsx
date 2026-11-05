@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { PresetSidebar } from "./components/PresetSidebar";
 import { WorkspaceIsland } from "./components/WorkspaceIsland";
-import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "./types";
+import { ProgressModal } from "./components/ProgressModal";
+import { PresetId, PresetSettings, PreviewMedia, VideoMetadata, RenderProgressPayload } from "./types";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export default function App() {
@@ -19,7 +21,28 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isProcessingPreview, setIsProcessingPreview] = useState<boolean>(false);
   const [previewMedia, setPreviewMedia] = useState<PreviewMedia | null>(null);
-  const [isExporting, setIsExporting] = useState<boolean>(false);
+
+  // Upscale and Progress states
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isFullUpscale, setIsFullUpscale] = useState<boolean>(false);
+  const [progress, setProgress] = useState<RenderProgressPayload | null>(null);
+  const [completedPath, setCompletedPath] = useState<string | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [isUpscaling, setIsUpscaling] = useState<boolean>(false);
+
+  // Listen to live render progress emitted by Rust backend
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<RenderProgressPayload>("render-progress", (event) => {
+      setProgress(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // Load video given absolute file path
   const loadVideoFromPath = useCallback(async (filePath: string) => {
@@ -148,8 +171,20 @@ export default function App() {
 
   // Execute Real AI 3s Preview on Apple GPU
   const handleRunPreview = useCallback(async () => {
-    if (!video || isProcessingPreview) return;
+    if (!video || isProcessingPreview || isUpscaling) return;
     setIsProcessingPreview(true);
+    setIsFullUpscale(false);
+    setCompletedPath(null);
+    setRenderError(null);
+    setProgress({
+      stage: "Extracting 3s frames with deinterlacer...",
+      percent: 5,
+      current_frame: 0,
+      total_frames: Math.round(3.0 * (video.fps || 30)),
+      fps: 0,
+      eta_seconds: 10,
+    });
+    setIsModalOpen(true);
 
     try {
       const scale = settings.targetResolution === "4k" ? 4 : 2;
@@ -173,28 +208,81 @@ export default function App() {
         outputHeight: res.output_height,
       });
       setIsPlaying(true);
-    } catch (err) {
-      console.warn("Real preview failed, falling back to local source comparison:", err);
-      setPreviewMedia({
-        originalUrl: video.srcUrl,
-        enhancedUrl: video.srcUrl,
-        outputWidth: video.width * 2,
-        outputHeight: video.height * 2,
-      });
-      setIsPlaying(true);
+      // Close modal on preview success so user can immediately view split-screen slider
+      setIsModalOpen(false);
+    } catch (err: unknown) {
+      console.warn("Real preview failed:", err);
+      const errMsg = typeof err === "string" ? err : (err as Error)?.message || "Preview failed";
+      setRenderError(errMsg);
     } finally {
       setIsProcessingPreview(false);
     }
-  }, [video, isProcessingPreview, currentTime, settings]);
+  }, [video, isProcessingPreview, isUpscaling, currentTime, settings]);
 
-  const handleExport = useCallback(() => {
-    if (!video || isExporting) return;
-    setIsExporting(true);
-    setTimeout(() => {
-      setIsExporting(false);
-      alert(`Export of ${video.name} completed successfully!`);
-    }, 2500);
-  }, [video, isExporting]);
+  // Execute Full Video AI Upscale
+  const handleStartUpscale = useCallback(async () => {
+    if (!video || isUpscaling || isProcessingPreview) return;
+    setIsUpscaling(true);
+    setIsFullUpscale(true);
+    setCompletedPath(null);
+    setRenderError(null);
+    setProgress({
+      stage: "Initializing AI pipeline...",
+      percent: 2,
+      current_frame: 0,
+      total_frames: Math.round((video.duration || 10) * (video.fps || 30)),
+      fps: 0,
+      eta_seconds: 30,
+    });
+    setIsModalOpen(true);
+
+    try {
+      const scale = settings.targetResolution === "4k" ? 4 : 2;
+      const res = await invoke<string>("upscale_video", {
+        inputPath: video.path,
+        outputPath: "",
+        scale,
+        deinterlace: settings.deinterlace,
+      });
+
+      setCompletedPath(res);
+      setProgress({
+        stage: "Upscale Complete!",
+        percent: 100,
+        current_frame: Math.round((video.duration || 10) * (video.fps || 30)),
+        total_frames: Math.round((video.duration || 10) * (video.fps || 30)),
+        fps: 0,
+        eta_seconds: 0,
+      });
+    } catch (err: unknown) {
+      console.warn("Full upscale failed:", err);
+      const errMsg = typeof err === "string" ? err : (err as Error)?.message || "Upscale failed";
+      setRenderError(errMsg);
+    } finally {
+      setIsUpscaling(false);
+    }
+  }, [video, isUpscaling, isProcessingPreview, settings]);
+
+  // Cancel running pipeline
+  const handleCancel = useCallback(async () => {
+    try {
+      await invoke("cancel_render");
+    } catch (e) {
+      console.warn("Cancel invoke failed:", e);
+    }
+    setIsModalOpen(false);
+    setIsUpscaling(false);
+    setIsProcessingPreview(false);
+  }, []);
+
+  // Reveal finished file in macOS Finder
+  const handleOpenFinder = useCallback(async (path: string) => {
+    try {
+      await invoke("show_in_finder", { path });
+    } catch (e) {
+      console.warn("Show in finder failed:", e);
+    }
+  }, []);
 
   // Global Keyboard shortcuts
   useEffect(() => {
@@ -206,13 +294,13 @@ export default function App() {
         setIsPlaying((prev) => !prev);
       } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        handleExport();
+        handleStartUpscale();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleExport]);
+  }, [handleStartUpscale]);
 
   const handleDrag = (e: React.MouseEvent) => {
     if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, select, video")) {
@@ -264,8 +352,24 @@ export default function App() {
           setIsPlaying(true);
         }}
         onRunPreview={handleRunPreview}
-        isExporting={isExporting}
-        onExport={handleExport}
+        isUpscaling={isUpscaling}
+        onStartUpscale={handleStartUpscale}
+      />
+
+      {/* Real-time Progress HUD / Modal */}
+      <ProgressModal
+        isOpen={isModalOpen}
+        isFullUpscale={isFullUpscale}
+        progress={progress}
+        completedPath={completedPath}
+        error={renderError}
+        onCancel={handleCancel}
+        onOpenFinder={handleOpenFinder}
+        onClose={() => {
+          setIsModalOpen(false);
+          setCompletedPath(null);
+          setRenderError(null);
+        }}
       />
     </div>
   );

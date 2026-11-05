@@ -9,7 +9,8 @@ import {
   FileVideo,
   Clock,
   Sparkles,
-  Undo2
+  Undo2,
+  Zap,
 } from "lucide-react";
 import { PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
@@ -31,8 +32,8 @@ interface WorkspaceIslandProps {
   previewMedia: PreviewMedia | null;
   onClearPreview: () => void;
   onRunPreview: () => void;
-  isExporting: boolean;
-  onExport: () => void;
+  isUpscaling: boolean;
+  onStartUpscale: () => void;
 }
 
 export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
@@ -53,8 +54,8 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   previewMedia,
   onClearPreview,
   onRunPreview,
-  isExporting,
-  onExport
+  isUpscaling,
+  onStartUpscale,
 }) => {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -400,10 +401,10 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   className="w-full h-full object-contain pointer-events-none"
                 />
 
-                {/* Floating Glass Pill for Video Playback & 3s Preview Action */}
+                {/* Floating Glass Pill for Video Playback */}
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 backdrop-blur-xl border border-white/10 px-3 py-1.5 flex items-center gap-3 shadow-2xl z-20 cursor-default"
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 backdrop-blur-xl border border-white/10 px-3.5 py-1.5 flex items-center gap-3 shadow-2xl z-20 cursor-default"
                 >
                   <button
                     onClick={onTogglePlay}
@@ -417,8 +418,8 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     )}
                   </button>
 
-                  {/* Scrubber with highlighted 3s segment */}
-                  <div className="flex items-center space-x-2">
+                  {/* Scrubber with full timecode */}
+                  <div className="flex items-center space-x-2.5">
                     <input
                       type="range"
                       min={0}
@@ -426,26 +427,12 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                       step={0.1}
                       value={currentTime}
                       onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
-                      className="w-36 pro-slider"
+                      className="w-56 pro-slider"
                     />
-                    <span className="font-mono text-[10.5px] text-zinc-300 tabular-nums">
-                      {formatTimecode(currentTime)}
+                    <span className="font-mono text-[11px] text-zinc-300 tabular-nums">
+                      {formatTimecode(currentTime)} / {formatTimecode(video.duration)}
                     </span>
                   </div>
-
-                  {/* Primary 3s Preview Action */}
-                  <button
-                    onClick={onRunPreview}
-                    disabled={isProcessingPreview}
-                    className="bg-white text-zinc-950 hover:bg-zinc-200 active:scale-95 px-3 py-1 rounded-full text-xs font-semibold shadow flex items-center space-x-1.5 transition-all disabled:opacity-50 flex-shrink-0"
-                  >
-                    {isProcessingPreview ? (
-                      <RotateCcw className="w-3 h-3 animate-spin text-zinc-950" />
-                    ) : (
-                      <span>⚡</span>
-                    )}
-                    <span>{isProcessingPreview ? "Generating..." : "Render 3s Preview"}</span>
-                  </button>
                 </div>
               </div>
             )}
@@ -464,7 +451,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
             )}
           </div>
 
-          {/* Bottom Telemetry & Export Bar */}
+          {/* Bottom Telemetry & Upscale Action Bar */}
           <div className="h-12 flex items-center justify-between gap-4 pt-1 flex-shrink-0 z-20 px-1">
             {/* 3 Minimal Bento Cards */}
             <div className="flex items-center space-x-2">
@@ -490,32 +477,49 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
 
               <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[90px]">
                 <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                  Est. Time
+                  Scale
                 </div>
                 <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  ~12s (Preview)
+                  {settings.targetResolution === "4k" ? "4× UHD" : "2× FHD"}
                 </div>
               </div>
             </div>
 
-            {/* Single Accent Gradient CTA */}
-            <button
-              onClick={onExport}
-              disabled={isExporting}
-              className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
-            >
-              {isExporting ? (
-                <>
-                  <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                  <span>Exporting...</span>
-                </>
-              ) : (
-                <>
-                  <span>Export Full Video</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </>
-              )}
-            </button>
+            {/* Actions: 3s Quick Preview + Primary Start Upscale Button */}
+            <div className="flex items-center space-x-2.5">
+              <button
+                onClick={onRunPreview}
+                disabled={isProcessingPreview || isUpscaling}
+                className="h-10 px-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] active:bg-white/[0.04] text-zinc-300 hover:text-white font-medium text-xs border border-white/[0.08] flex items-center space-x-2 transition-all disabled:opacity-50"
+                title="Generate 3-second before/after comparison"
+              >
+                {isProcessingPreview ? (
+                  <RotateCcw className="w-3.5 h-3.5 animate-spin text-zinc-400" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+                )}
+                <span>{isProcessingPreview ? "Generating..." : "3s Quick Preview"}</span>
+              </button>
+
+              <button
+                onClick={onStartUpscale}
+                disabled={isUpscaling || isProcessingPreview}
+                className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
+              >
+                {isUpscaling ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
+                    <span>Upscaling...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    <span>Start Upscale ({settings.targetResolution === "4k" ? "4K" : "1080p"})</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

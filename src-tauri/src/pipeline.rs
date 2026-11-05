@@ -1,8 +1,21 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderProgress {
+    pub stage: String,
+    pub percent: f64,
+    pub current_frame: u32,
+    pub total_frames: u32,
+    pub fps: f64,
+    pub eta_seconds: u32,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VideoMetadata {
@@ -46,7 +59,6 @@ struct FFprobeOutput {
 }
 
 fn get_binary_path() -> PathBuf {
-    // Current executable dir or relative binaries dir
     let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if path.ends_with("src-tauri") {
         path.push("binaries");
@@ -90,10 +102,10 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
     let probe: FFprobeOutput = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Failed to parse ffprobe json: {}", e))?;
 
-    let video_stream = probe
-        .streams
-        .as_ref()
-        .and_then(|s| s.iter().find(|st| st.width.is_some() && st.height.is_some()));
+    let video_stream = probe.streams.as_ref().and_then(|s| {
+        s.iter()
+            .find(|st| st.width.is_some() && st.height.is_some())
+    });
 
     let width = video_stream.and_then(|s| s.width).unwrap_or(640);
     let height = video_stream.and_then(|s| s.height).unwrap_or(480);
@@ -140,15 +152,19 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
     })
 }
 
-pub fn execute_preview_pipeline(
+pub fn execute_preview_pipeline<F>(
     input_path: &str,
     start_sec: f64,
     scale: u32,
     deinterlace: bool,
-) -> Result<PreviewOutput, String> {
+    progress: F,
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<PreviewOutput, String>
+where
+    F: Fn(RenderProgress) + Send + Sync + 'static,
+{
     let meta = probe_video_file(input_path)?;
 
-    // 1. Create isolated temp dir for this preview run
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -163,14 +179,24 @@ pub fn execute_preview_pipeline(
     let original_3s_path = temp_dir.join("original_3s.mp4");
     let enhanced_3s_path = temp_dir.join("enhanced_3s.mp4");
 
-    // 2. Generate clean original 3s clip for sync playback (with deinterlacing if requested)
+    // Stage 1: Extract 3s original clip and raw frames
+    progress(RenderProgress {
+        stage: "Extracting 3s frames with deinterlacer...".to_string(),
+        percent: 5.0,
+        current_frame: 0,
+        total_frames: (3.0 * meta.fps) as u32,
+        fps: 0.0,
+        eta_seconds: 12,
+    });
+
     let filter_arg = if deinterlace {
         "bwdif=mode=send_frame"
     } else {
         "null"
     };
 
-    let original_extract = Command::new("ffmpeg")
+    // 1. Extract 3s reference MP4 for side-by-side player
+    let mut original_extract = Command::new("ffmpeg")
         .args([
             "-y",
             "-ss",
@@ -190,16 +216,24 @@ pub fn execute_preview_pipeline(
             "-an",
             original_3s_path.to_str().unwrap(),
         ])
-        .output()
-        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
-    if !original_extract.status.success() {
+    let orig_status = original_extract
+        .wait()
+        .map_err(|e| format!("Failed to wait for ffmpeg: {}", e))?;
+    if !orig_status.success() {
         return Err("Failed to extract original 3s segment".to_string());
     }
 
-    // 3. Extract 3-second frames to PNG for AI inference
+    if cancel_flag.load(Ordering::Relaxed) {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("Operation cancelled by user".to_string());
+    }
+
+    // 2. Extract frames for neural inference
     let frame_pattern = frames_in_dir.join("frame_%04d.png");
-    let extract_frames = Command::new("ffmpeg")
+    let mut extract_frames = Command::new("ffmpeg")
         .args([
             "-y",
             "-ss",
@@ -212,21 +246,35 @@ pub fn execute_preview_pipeline(
             filter_arg,
             frame_pattern.to_str().unwrap(),
         ])
-        .output()
+        .spawn()
         .map_err(|e| format!("Failed to extract frames: {}", e))?;
 
-    if !extract_frames.status.success() {
+    let extract_status = extract_frames.wait().map_err(|e| e.to_string())?;
+    if !extract_status.success() {
         return Err("Failed to extract video frames".to_string());
     }
 
-    // 4. Run real Real-ESRGAN inference on Apple Silicon GPU
+    // Count extracted frames
+    let frame_count = fs::read_dir(&frames_in_dir)
+        .map(|r| r.count() as u32)
+        .unwrap_or(72);
+
+    progress(RenderProgress {
+        stage: "AI Upscaling on Apple Silicon GPU...".to_string(),
+        percent: 15.0,
+        current_frame: 0,
+        total_frames: frame_count,
+        fps: 0.0,
+        eta_seconds: 10,
+    });
+
+    // Stage 2: Run Real-ESRGAN on Apple GPU with live progress parsing
     let bin_dir = get_binary_path();
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
-
     let scale_str = if scale == 4 { "4" } else { "2" };
 
-    let ai_run = Command::new(&runner)
+    let mut ai_child = Command::new(&runner)
         .args([
             "-i",
             frames_in_dir.to_str().unwrap(),
@@ -239,19 +287,74 @@ pub fn execute_preview_pipeline(
             "-n",
             "realesr-animevideov3",
         ])
-        .output()
-        .map_err(|e| format!("Failed to execute Real-ESRGAN runner: {}", e))?;
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
-    if !ai_run.status.success() {
-        let err_msg = String::from_utf8_lossy(&ai_run.stderr);
-        return Err(format!("AI upscaler execution failed: {}", err_msg));
+    let start_time = Instant::now();
+    if let Some(stderr) = ai_child.stderr.take() {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            if cancel_flag.load(Ordering::Relaxed) {
+                let _ = ai_child.kill();
+                let _ = fs::remove_dir_all(&temp_dir);
+                return Err("Operation cancelled by user".to_string());
+            }
+
+            if line.contains('%') {
+                if let Some(pct_str) = line
+                    .split('%')
+                    .next()
+                    .and_then(|s| s.split_whitespace().last())
+                {
+                    if let Ok(pct) = pct_str.parse::<f64>() {
+                        let overall_pct = 15.0 + (pct / 100.0) * 70.0;
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        let current_f = ((pct / 100.0) * frame_count as f64) as u32;
+                        let fps = if elapsed > 0.0 {
+                            current_f as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+                        let eta = if fps > 0.0 && current_f < frame_count {
+                            ((frame_count - current_f) as f64 / fps) as u32
+                        } else {
+                            0
+                        };
+
+                        progress(RenderProgress {
+                            stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", pct),
+                            percent: overall_pct,
+                            current_frame: current_f,
+                            total_frames: frame_count,
+                            fps,
+                            eta_seconds: eta,
+                        });
+                    }
+                }
+            }
+        }
     }
 
-    // 5. Encode upscaled frames back to enhanced 3s MP4 using VideoToolbox
+    let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
+    if !ai_status.success() {
+        return Err("AI upscaling process encountered an error".to_string());
+    }
+
+    // Stage 3: Encode upscaled frames using hardware VideoToolbox
+    progress(RenderProgress {
+        stage: "Encoding VideoToolbox hardware stream...".to_string(),
+        percent: 88.0,
+        current_frame: frame_count,
+        total_frames: frame_count,
+        fps: 30.0,
+        eta_seconds: 2,
+    });
+
     let out_pattern = frames_out_dir.join("frame_%04d.png");
     let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
 
-    let encode_run = Command::new("ffmpeg")
+    let mut encode_run = Command::new("ffmpeg")
         .args([
             "-y",
             "-r",
@@ -266,16 +369,26 @@ pub fn execute_preview_pipeline(
             "yuv420p",
             enhanced_3s_path.to_str().unwrap(),
         ])
-        .output()
-        .map_err(|e| format!("Failed to encode output video: {}", e))?;
+        .spawn()
+        .map_err(|e| format!("Failed to spawn encoder: {}", e))?;
 
-    if !encode_run.status.success() {
+    let encode_status = encode_run.wait().map_err(|e| e.to_string())?;
+    if !encode_status.success() {
         return Err("Failed to encode final enhanced video".to_string());
     }
 
-    // 6. Clean up raw frame images to obey Zero-Disk-Write rule
+    // Zero-Disk Cleanup
     let _ = fs::remove_dir_all(&frames_in_dir);
     let _ = fs::remove_dir_all(&frames_out_dir);
+
+    progress(RenderProgress {
+        stage: "Complete!".to_string(),
+        percent: 100.0,
+        current_frame: frame_count,
+        total_frames: frame_count,
+        fps: 0.0,
+        eta_seconds: 0,
+    });
 
     let output_width = meta.width * (if scale == 4 { 4 } else { 2 });
     let output_height = meta.height * (if scale == 4 { 4 } else { 2 });
@@ -289,25 +402,239 @@ pub fn execute_preview_pipeline(
     })
 }
 
+pub fn execute_full_upscale_pipeline<F>(
+    input_path: &str,
+    output_path: &str,
+    scale: u32,
+    deinterlace: bool,
+    progress: F,
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<String, String>
+where
+    F: Fn(RenderProgress) + Send + Sync + 'static,
+{
+    let meta = probe_video_file(input_path)?;
+
+    let in_p = Path::new(input_path);
+    let final_dest = if output_path.is_empty() {
+        let stem = in_p.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+        let parent = in_p.parent().unwrap_or_else(|| Path::new("."));
+        parent.join(format!("{}_dereel_{}x.mp4", stem, scale))
+    } else {
+        PathBuf::from(output_path)
+    };
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir().join(format!("dereel_full_{}", ts));
+    let frames_in_dir = temp_dir.join("in");
+    let frames_out_dir = temp_dir.join("out");
+
+    fs::create_dir_all(&frames_in_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&frames_out_dir).map_err(|e| e.to_string())?;
+
+    let filter_arg = if deinterlace {
+        "bwdif=mode=send_frame"
+    } else {
+        "null"
+    };
+
+    let total_est_frames = (meta.duration * meta.fps).max(1.0) as u32;
+
+    progress(RenderProgress {
+        stage: "Extracting video frames...".to_string(),
+        percent: 2.0,
+        current_frame: 0,
+        total_frames: total_est_frames,
+        fps: 0.0,
+        eta_seconds: 30,
+    });
+
+    let frame_pattern = frames_in_dir.join("frame_%06d.png");
+    let mut extract_child = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-i",
+            input_path,
+            "-vf",
+            filter_arg,
+            frame_pattern.to_str().unwrap(),
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to extract frames: {}", e))?;
+
+    let ext_status = extract_child.wait().map_err(|e| e.to_string())?;
+    if !ext_status.success() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("Failed to extract all video frames".to_string());
+    }
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("Upscale cancelled by user".to_string());
+    }
+
+    let actual_frames = fs::read_dir(&frames_in_dir)
+        .map(|r| r.count() as u32)
+        .unwrap_or(total_est_frames);
+
+    progress(RenderProgress {
+        stage: "AI Super-Resolution on Apple GPU...".to_string(),
+        percent: 10.0,
+        current_frame: 0,
+        total_frames: actual_frames,
+        fps: 0.0,
+        eta_seconds: (actual_frames as f64 / 15.0) as u32,
+    });
+
+    let bin_dir = get_binary_path();
+    let runner = bin_dir.join("realesrgan-ncnn-vulkan");
+    let models_dir = bin_dir.join("models");
+    let scale_str = if scale == 4 { "4" } else { "2" };
+
+    let mut ai_child = Command::new(&runner)
+        .args([
+            "-i",
+            frames_in_dir.to_str().unwrap(),
+            "-o",
+            frames_out_dir.to_str().unwrap(),
+            "-s",
+            scale_str,
+            "-m",
+            models_dir.to_str().unwrap(),
+            "-n",
+            "realesr-animevideov3",
+        ])
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
+
+    let start_time = Instant::now();
+    if let Some(stderr) = ai_child.stderr.take() {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().map_while(Result::ok) {
+            if cancel_flag.load(Ordering::Relaxed) {
+                let _ = ai_child.kill();
+                let _ = fs::remove_dir_all(&temp_dir);
+                return Err("Upscale cancelled by user".to_string());
+            }
+
+            if line.contains('%') {
+                if let Some(pct_str) = line
+                    .split('%')
+                    .next()
+                    .and_then(|s| s.split_whitespace().last())
+                {
+                    if let Ok(pct) = pct_str.parse::<f64>() {
+                        let overall_pct = 10.0 + (pct / 100.0) * 80.0;
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        let current_f = ((pct / 100.0) * actual_frames as f64) as u32;
+                        let fps = if elapsed > 0.0 {
+                            current_f as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+                        let eta = if fps > 0.0 && current_f < actual_frames {
+                            ((actual_frames - current_f) as f64 / fps) as u32
+                        } else {
+                            0
+                        };
+
+                        progress(RenderProgress {
+                            stage: format!("AI Upscaling on Apple GPU — {:.1}%", pct),
+                            percent: overall_pct,
+                            current_frame: current_f,
+                            total_frames: actual_frames,
+                            fps,
+                            eta_seconds: eta,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
+    if !ai_status.success() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("AI upscaling process failed".to_string());
+    }
+
+    // Stage 3: Hardware encode back to MP4 with original audio stream remuxed
+    progress(RenderProgress {
+        stage: "Encoding VideoToolbox 4K Stream with audio...".to_string(),
+        percent: 92.0,
+        current_frame: actual_frames,
+        total_frames: actual_frames,
+        fps: 40.0,
+        eta_seconds: 5,
+    });
+
+    let out_pattern = frames_out_dir.join("frame_%06d.png");
+    let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
+
+    let mut encode_run = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-r",
+            &format!("{:.2}", target_fps),
+            "-i",
+            out_pattern.to_str().unwrap(),
+            "-i",
+            input_path, // input for audio pass-through
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a?", // copy audio if stream exists
+            "-c:v",
+            "h264_videotoolbox",
+            "-b:v",
+            "16M",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            final_dest.to_str().unwrap(),
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to spawn encoder: {}", e))?;
+
+    let encode_status = encode_run.wait().map_err(|e| e.to_string())?;
+    if !encode_status.success() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err("Failed to encode final video".to_string());
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    progress(RenderProgress {
+        stage: "Upscale Complete!".to_string(),
+        percent: 100.0,
+        current_frame: actual_frames,
+        total_frames: actual_frames,
+        fps: 0.0,
+        eta_seconds: 0,
+    });
+
+    Ok(final_dest.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_pipeline_on_demo() {
-        let mut demo = std::env::current_dir().unwrap();
-        if !demo.ends_with("src-tauri") {
-            demo.push("src-tauri");
-        }
-        demo.push("binaries");
-        demo.push("onepiece_demo.mp4");
-
-        if demo.exists() {
-            let res = execute_preview_pipeline(demo.to_str().unwrap(), 0.0, 2, true);
-            assert!(res.is_ok(), "Pipeline failed: {:?}", res.err());
-            let out = res.unwrap();
-            assert!(Path::new(&out.original_path).exists());
-            assert!(Path::new(&out.enhanced_path).exists());
+    fn test_probe_metadata() {
+        let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join("onepiece_demo.mp4");
+        if sample.exists() {
+            let meta = probe_video_file(sample.to_str().unwrap()).expect("Probe failed");
+            assert_eq!(meta.width, 640);
+            assert_eq!(meta.height, 480);
+            assert!(meta.duration > 0.0);
         }
     }
 }

@@ -32,3 +32,12 @@ export interface PreviewMedia {
   outputWidth: number;
   outputHeight: number;
 }
+
+export interface RenderProgressPayload {
+  stage: string;
+  percent: number;
+  current_frame: number;
+  total_frames: number;
+  fps: number;
+  eta_seconds: number;
+}
