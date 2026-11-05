@@ -17,6 +17,7 @@ export interface PresetSettings {
 export interface VideoMetadata {
   name: string;
   path: string;
+  srcUrl: string;
   size: number;
   duration: number; // in seconds
   fps: number;

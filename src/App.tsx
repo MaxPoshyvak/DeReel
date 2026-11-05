@@ -3,6 +3,7 @@ import { PresetSidebar } from "./components/PresetSidebar";
 import { WorkspaceIsland } from "./components/WorkspaceIsland";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "./types";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export default function App() {
   const [activePresetId, setActivePresetId] = useState<PresetId>("vhs");
@@ -20,21 +21,69 @@ export default function App() {
   const [previewMedia, setPreviewMedia] = useState<PreviewMedia | null>(null);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
-  // Load demo video (uses bundled onepiece_demo.mp4)
-  const handleLoadDemo = useCallback(async () => {
-    const demoPath = "/Users/max/FFI/Project/DeReel/src-tauri/binaries/onepiece_demo.mp4";
-
+  // Load video given absolute file path
+  const loadVideoFromPath = useCallback(async (filePath: string) => {
     try {
-      // Probe real metadata via Tauri ffprobe
-      const meta = await invoke<VideoMetadata>("probe_video", { path: demoPath });
-      setVideo(meta);
+      const meta = await invoke<Omit<VideoMetadata, "srcUrl">>("probe_video", { path: filePath });
+      setVideo({
+        ...meta,
+        srcUrl: convertFileSrc(filePath),
+      });
       setCurrentTime(0.0);
       setPreviewMedia(null);
+      setIsPlaying(true);
+    } catch (err) {
+      console.warn("Probe video failed:", err);
+      const name = filePath.split("/").pop() || "video.mp4";
+      setVideo({
+        name,
+        path: filePath,
+        srcUrl: convertFileSrc(filePath),
+        size: 0,
+        duration: 30.0,
+        fps: 29.97,
+        width: 640,
+        height: 480,
+        codec: "h264",
+      });
+      setCurrentTime(0.0);
+      setPreviewMedia(null);
+      setIsPlaying(true);
+    }
+  }, []);
+
+  // Native Finder file browser
+  const handleBrowseFile = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v"] }],
+      });
+      if (selected && typeof selected === "string") {
+        await loadVideoFromPath(selected);
+      }
+    } catch (err) {
+      console.warn("Native file dialog error:", err);
+    }
+  }, [loadVideoFromPath]);
+
+  // Load demo VHS sample
+  const handleLoadDemo = useCallback(async () => {
+    const demoPath = "/Users/max/FFI/Project/DeReel/src-tauri/binaries/onepiece_demo.mp4";
+    try {
+      const meta = await invoke<Omit<VideoMetadata, "srcUrl">>("probe_video", { path: demoPath });
+      setVideo({
+        ...meta,
+        srcUrl: convertFileSrc(demoPath),
+      });
+      setCurrentTime(0.0);
+      setPreviewMedia(null);
+      setIsPlaying(true);
     } catch {
-      // Fallback for browser mode
       setVideo({
         name: "demo_clip_vhs.mp4",
         path: demoPath,
+        srcUrl: "/demo_sample.mp4",
         size: 592566,
         duration: 7.55,
         fps: 23.98,
@@ -44,33 +93,60 @@ export default function App() {
       });
       setCurrentTime(0.0);
       setPreviewMedia(null);
+      setIsPlaying(true);
     }
   }, []);
 
+  // Handle file drop from HTML5 file object
   const handleSelectFile = useCallback(async (file: File) => {
-    // If running in Tauri with file path:
-    // In web standard, file.name is available; we probe if path is available
-    const filePath = (file as unknown as { path?: string }).path || file.name;
+    const blobUrl = URL.createObjectURL(file);
+    const filePath = (file as unknown as { path?: string }).path;
 
-    try {
-      const meta = await invoke<VideoMetadata>("probe_video", { path: filePath });
-      setVideo(meta);
-    } catch {
-      setVideo({
-        name: file.name,
-        path: filePath,
-        size: file.size,
-        duration: 30.0,
-        fps: 29.97,
-        width: 640,
-        height: 480,
-        codec: "h264",
-      });
+    if (filePath) {
+      await loadVideoFromPath(filePath);
+      return;
     }
+
+    setVideo({
+      name: file.name,
+      path: file.name,
+      srcUrl: blobUrl,
+      size: file.size,
+      duration: 30.0,
+      fps: 29.97,
+      width: 640,
+      height: 480,
+      codec: "h264",
+    });
     setCurrentTime(0.0);
     setPreviewMedia(null);
-  }, []);
+    setIsPlaying(true);
+  }, [loadVideoFromPath]);
 
+  // Listen to Tauri window drag & drop events
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    try {
+      import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => {
+        getCurrentWebview()
+          .onDragDropEvent((event) => {
+            if (event.payload.type === "drop" && event.payload.paths.length > 0) {
+              loadVideoFromPath(event.payload.paths[0]);
+            }
+          })
+          .then((fn) => {
+            unlisten = fn;
+          });
+      });
+    } catch {
+      // Ignored in browser mode
+    }
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [loadVideoFromPath]);
+
+  // Execute Real AI 3s Preview on Apple GPU
   const handleRunPreview = useCallback(async () => {
     if (!video || isProcessingPreview) return;
     setIsProcessingPreview(true);
@@ -98,11 +174,10 @@ export default function App() {
       });
       setIsPlaying(true);
     } catch (err) {
-      console.warn("Real preview failed, falling back to simulated preview:", err);
-      // Fallback
+      console.warn("Real preview failed, falling back to local source comparison:", err);
       setPreviewMedia({
-        originalUrl: "/demo_sample.mp4",
-        enhancedUrl: "/demo_sample.mp4",
+        originalUrl: video.srcUrl,
+        enhancedUrl: video.srcUrl,
         outputWidth: video.width * 2,
         outputHeight: video.height * 2,
       });
@@ -167,6 +242,7 @@ export default function App() {
       <WorkspaceIsland
         video={video}
         onSelectFile={handleSelectFile}
+        onBrowseFile={handleBrowseFile}
         onLoadDemo={handleLoadDemo}
         onClearVideo={() => {
           setVideo(null);
@@ -183,6 +259,10 @@ export default function App() {
         onTogglePlay={() => setIsPlaying((p) => !p)}
         isProcessingPreview={isProcessingPreview}
         previewMedia={previewMedia}
+        onClearPreview={() => {
+          setPreviewMedia(null);
+          setIsPlaying(true);
+        }}
         onRunPreview={handleRunPreview}
         isExporting={isExporting}
         onExport={handleExport}
