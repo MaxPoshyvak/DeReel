@@ -37,6 +37,7 @@ interface WorkspaceIslandProps {
   onStartUpscale: () => void;
   completedPath?: string | null;
   onOpenFinder?: (path: string) => void;
+  onUseUpscaledAsSource?: (path: string) => void;
 }
 
 export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
@@ -61,6 +62,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   onStartUpscale,
   completedPath,
   onOpenFinder,
+  onUseUpscaledAsSource,
 }) => {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -83,39 +85,66 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
     }
   }, [isPlaying, previewMedia]);
 
-  // Sync split-screen preview videos play/pause
+  // Synchronize split-screen comparison videos with lockstep play/pause & drift management
   useEffect(() => {
-    if (previewMedia && originalPreviewRef.current && enhancedPreviewRef.current) {
-      if (isPlaying) {
-        originalPreviewRef.current.play().catch(() => {});
-        enhancedPreviewRef.current.play().catch(() => {});
-      } else {
-        originalPreviewRef.current.pause();
-        enhancedPreviewRef.current.pause();
-      }
+    const orig = originalPreviewRef.current;
+    const enh = enhancedPreviewRef.current;
+    if (!previewMedia || !orig || !enh) return;
+
+    if (isPlaying) {
+      enh.currentTime = orig.currentTime;
+      orig.play().catch(() => {});
+      enh.play().catch(() => {});
+    } else {
+      orig.pause();
+      enh.pause();
+      enh.currentTime = orig.currentTime;
     }
   }, [isPlaying, previewMedia]);
+
+  // Lockstep sync listeners without jitter-seeking
+  useEffect(() => {
+    const orig = originalPreviewRef.current;
+    const enh = enhancedPreviewRef.current;
+    if (!previewMedia || !orig || !enh) return;
+
+    const handleOrigTimeUpdate = () => {
+      onSeek(orig.currentTime);
+      const drift = Math.abs(orig.currentTime - enh.currentTime);
+      // Only snap if drift is larger than 0.25s to prevent WebKit decoder micro-stutters
+      if (drift > 0.25) {
+        enh.currentTime = orig.currentTime;
+      }
+    };
+
+    const handleOrigSeeked = () => {
+      enh.currentTime = orig.currentTime;
+    };
+
+    const handleOrigEnded = () => {
+      orig.currentTime = 0;
+      enh.currentTime = 0;
+      if (isPlaying) {
+        orig.play().catch(() => {});
+        enh.play().catch(() => {});
+      }
+    };
+
+    orig.addEventListener("timeupdate", handleOrigTimeUpdate);
+    orig.addEventListener("seeked", handleOrigSeeked);
+    orig.addEventListener("ended", handleOrigEnded);
+
+    return () => {
+      orig.removeEventListener("timeupdate", handleOrigTimeUpdate);
+      orig.removeEventListener("seeked", handleOrigSeeked);
+      orig.removeEventListener("ended", handleOrigEnded);
+    };
+  }, [previewMedia, isPlaying, onSeek]);
 
   const handleSourceTimeUpdate = () => {
     if (sourceVideoRef.current) {
       onSeek(sourceVideoRef.current.currentTime);
     }
-  };
-
-  const handlePreviewSync = () => {
-    if (originalPreviewRef.current && enhancedPreviewRef.current) {
-      const diff = Math.abs(originalPreviewRef.current.currentTime - enhancedPreviewRef.current.currentTime);
-      if (diff > 0.05) {
-        enhancedPreviewRef.current.currentTime = originalPreviewRef.current.currentTime;
-      }
-    }
-  };
-
-  const handlePreviewTimeUpdate = () => {
-    if (originalPreviewRef.current) {
-      onSeek(originalPreviewRef.current.currentTime);
-    }
-    handlePreviewSync();
   };
 
   const handleSeekVideo = (newTime: number) => {
@@ -344,7 +373,6 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     muted
                     playsInline
                     autoPlay
-                    onTimeUpdate={handlePreviewTimeUpdate}
                     className="w-full h-full object-contain pointer-events-none"
                   />
                 </div>
@@ -392,7 +420,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                 {/* Floating Glass Pill for Comparison Transport */}
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/80 backdrop-blur-xl border border-white/10 px-3.5 py-1.5 flex items-center gap-3 shadow-2xl z-20 cursor-default"
+                  className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/85 backdrop-blur-xl border border-white/10 px-4 py-2 flex items-center gap-3.5 shadow-2xl z-40 cursor-default"
                 >
                   <button
                     onClick={onTogglePlay}
@@ -407,26 +435,26 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   </button>
 
                   {/* Scrubber slider to scrub across the whole video in sync */}
-                  <div className="flex items-center space-x-2.5">
+                  <div className="flex items-center space-x-2.5 flex-shrink-0">
                     <input
                       type="range"
                       min={0}
                       max={video.duration || 100}
-                      step={0.1}
+                      step={0.05}
                       value={currentTime}
                       onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
-                      className="w-48 pro-slider"
+                      className="w-44 sm:w-60 pro-slider"
                     />
-                    <span className="font-mono text-[11px] text-zinc-300 tabular-nums">
+                    <span className="font-mono text-xs text-zinc-300 tabular-nums whitespace-nowrap flex-shrink-0">
                       {formatTimecode(currentTime)} / {formatTimecode(video.duration)}
                     </span>
                   </div>
 
-                  <div className="w-[1px] h-4 bg-white/15" />
+                  <div className="w-[1px] h-4 bg-white/15 flex-shrink-0" />
 
                   <button
                     onClick={onClearPreview}
-                    className="text-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/[0.08] transition-colors"
+                    className="text-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/[0.08] transition-colors flex-shrink-0"
                     title="Return to original video"
                   >
                     Exit
@@ -451,7 +479,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                 {/* Floating Glass Pill for Video Playback */}
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 backdrop-blur-xl border border-white/10 px-3.5 py-1.5 flex items-center gap-3 shadow-2xl z-20 cursor-default"
+                  className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/85 backdrop-blur-xl border border-white/10 px-4 py-2 flex items-center gap-3.5 shadow-2xl z-40 cursor-default"
                 >
                   <button
                     onClick={onTogglePlay}
@@ -465,18 +493,18 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     )}
                   </button>
 
-                  {/* Scrubber with full timecode */}
-                  <div className="flex items-center space-x-2.5">
+                  {/* Scrubber with full timecode in single horizontal line */}
+                  <div className="flex items-center space-x-2.5 flex-shrink-0">
                     <input
                       type="range"
                       min={0}
                       max={video.duration || 100}
-                      step={0.1}
+                      step={0.05}
                       value={currentTime}
                       onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
-                      className="w-56 pro-slider"
+                      className="w-48 sm:w-64 pro-slider"
                     />
-                    <span className="font-mono text-[11px] text-zinc-300 tabular-nums">
+                    <span className="font-mono text-xs text-zinc-300 tabular-nums whitespace-nowrap flex-shrink-0">
                       {formatTimecode(currentTime)} / {formatTimecode(video.duration)}
                     </span>
                   </div>
@@ -498,76 +526,136 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
             )}
           </div>
 
-          {/* Bottom Telemetry & Upscale Action Bar */}
-          <div className="h-12 flex items-center justify-between gap-4 pt-1 flex-shrink-0 z-20 px-1">
-            {/* 3 Minimal Bento Cards */}
-            <div className="flex items-center space-x-2">
-              <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[95px]">
-                <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                  Target Output
-                </div>
-                <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  {settings.targetResolution === "4k"
-                    ? `${video.width * 4} × ${video.height * 4}`
-                    : `${video.width * 2} × ${video.height * 2}`}
-                </div>
+          {/* Bottom Bar: COMPARISON ACTIONS vs SETUP CONTROLS */}
+          {previewMedia ? (
+            /* DEDICATED CLEAN COMPARISON BAR (No setup clutter) */
+            <div className="h-12 flex items-center justify-between gap-4 pt-1 flex-shrink-0 z-20 px-1 border-t border-white/[0.04]">
+              <div className="flex items-center space-x-2 text-xs font-mono text-zinc-400 bg-white/[0.03] px-3 py-1.5 rounded-xl border border-white/[0.06]">
+                <Sparkles className="w-3.5 h-3.5 text-[#38BDF8]" />
+                <span className="text-zinc-200 font-medium">
+                  {completedPath ? "Full Video AI Restored" : "3s Quick Preview"}
+                </span>
+                <span className="text-zinc-600">•</span>
+                <span className="text-zinc-300">
+                  {video.width}×{video.height} ➔ {previewMedia.outputWidth}×{previewMedia.outputHeight}
+                </span>
               </div>
 
-              <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[95px]">
-                <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                  Target FPS
-                </div>
-                <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  {video.fps.toFixed(1)} FPS
-                </div>
-              </div>
-
-              <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[90px]">
-                <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                  Scale
-                </div>
-                <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                  {settings.targetResolution === "4k" ? "4× UHD" : "2× FHD"}
-                </div>
-              </div>
-            </div>
-
-            {/* Actions: 3s Quick Preview + Primary Start Upscale Button */}
-            <div className="flex items-center space-x-2.5">
-              <button
-                onClick={onRunPreview}
-                disabled={isProcessingPreview || isUpscaling}
-                className="h-10 px-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] active:bg-white/[0.04] text-zinc-300 hover:text-white font-medium text-xs border border-white/[0.08] flex items-center space-x-2 transition-all disabled:opacity-50"
-                title="Generate 3-second before/after comparison"
-              >
-                {isProcessingPreview ? (
-                  <RotateCcw className="w-3.5 h-3.5 animate-spin text-zinc-400" />
-                ) : (
-                  <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+              <div className="flex items-center space-x-2.5">
+                {completedPath && onOpenFinder && (
+                  <button
+                    onClick={() => onOpenFinder(completedPath)}
+                    className="h-10 px-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 hover:text-white font-medium text-xs border border-white/[0.08] flex items-center space-x-1.5 transition-all"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Show in Finder</span>
+                  </button>
                 )}
-                <span>{isProcessingPreview ? "Generating..." : "3s Quick Preview"}</span>
-              </button>
 
-              <button
-                onClick={onStartUpscale}
-                disabled={isUpscaling || isProcessingPreview}
-                className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
-              >
-                {isUpscaling ? (
-                  <>
-                    <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                    <span>Upscaling...</span>
-                  </>
-                ) : (
-                  <>
+                {completedPath && onUseUpscaledAsSource && (
+                  <button
+                    onClick={() => onUseUpscaledAsSource(completedPath)}
+                    className="h-10 px-4 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-1.5 transition-all"
+                    title="Load this upscaled video into workspace to upscale further or apply more presets"
+                  >
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    <span>Start Upscale ({settings.targetResolution === "4k" ? "4K" : "1080p"})</span>
+                    <span>Upscale This Video Further</span>
                     <ArrowRight className="w-3.5 h-3.5" />
-                  </>
+                  </button>
                 )}
-              </button>
+
+                {!completedPath && (
+                  <button
+                    onClick={onStartUpscale}
+                    disabled={isUpscaling || isProcessingPreview}
+                    className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    <span>Start Full Upscale ({settings.targetResolution === "4k" ? "4K" : "1080p"})</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                <button
+                  onClick={onClearPreview}
+                  className="h-10 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 text-xs font-medium border border-white/[0.06] transition-all"
+                >
+                  Exit Comparison
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            /* SETUP CONTROLS FOR INITIAL WORKSPACE */
+            <div className="h-12 flex items-center justify-between gap-4 pt-1 flex-shrink-0 z-20 px-1">
+              {/* 3 Minimal Bento Cards */}
+              <div className="flex items-center space-x-2">
+                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[95px]">
+                  <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
+                    Target Output
+                  </div>
+                  <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
+                    {settings.targetResolution === "4k"
+                      ? `${video.width * 4} × ${video.height * 4}`
+                      : `${video.width * 2} × ${video.height * 2}`}
+                  </div>
+                </div>
+
+                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[95px]">
+                  <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
+                    Target FPS
+                  </div>
+                  <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
+                    {video.fps.toFixed(1)} FPS
+                  </div>
+                </div>
+
+                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[90px]">
+                  <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
+                    Scale
+                  </div>
+                  <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
+                    {settings.targetResolution === "4k" ? "4× UHD" : "2× FHD"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions: 3s Quick Preview + Primary Start Upscale Button */}
+              <div className="flex items-center space-x-2.5">
+                <button
+                  onClick={onRunPreview}
+                  disabled={isProcessingPreview || isUpscaling}
+                  className="h-10 px-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] active:bg-white/[0.04] text-zinc-300 hover:text-white font-medium text-xs border border-white/[0.08] flex items-center space-x-2 transition-all disabled:opacity-50"
+                  title="Generate 3-second before/after comparison"
+                >
+                  {isProcessingPreview ? (
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin text-zinc-400" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+                  )}
+                  <span>{isProcessingPreview ? "Generating..." : "3s Quick Preview"}</span>
+                </button>
+
+                <button
+                  onClick={onStartUpscale}
+                  disabled={isUpscaling || isProcessingPreview}
+                  className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
+                >
+                  {isUpscaling ? (
+                    <>
+                      <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Upscaling...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 fill-current" />
+                      <span>Start Upscale ({settings.targetResolution === "4k" ? "4K" : "1080p"})</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </main>

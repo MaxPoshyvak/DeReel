@@ -277,6 +277,16 @@ export default function App() {
     setIsPlaying(true);
   }, [video, completedPath, settings.targetResolution]);
 
+  // Load upscaled video as the new input to allow re-upscaling or applying more presets
+  const handleUseUpscaledAsSource = useCallback(
+    async (path: string) => {
+      setPreviewMedia(null);
+      setCompletedPath(null);
+      await loadVideoFromPath(path);
+    },
+    [loadVideoFromPath]
+  );
+
   // Cancel running pipeline
   const handleCancel = useCallback(async () => {
     try {
@@ -370,6 +380,7 @@ export default function App() {
         onStartUpscale={handleStartUpscale}
         completedPath={completedPath}
         onOpenFinder={handleOpenFinder}
+        onUseUpscaledAsSource={handleUseUpscaledAsSource}
       />
 
       {/* Real-time Progress HUD / Modal */}
