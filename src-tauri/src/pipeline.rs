@@ -72,6 +72,24 @@ fn get_binary_path() -> PathBuf {
     path
 }
 
+pub fn detect_hardware_chip() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+        {
+            if output.status.success() {
+                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+    }
+    "Apple Silicon".to_string()
+}
+
 pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
     let path = Path::new(path_str);
     if !path.exists() {
@@ -312,6 +330,7 @@ where
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
+    let chip = detect_hardware_chip();
     let start_time = Instant::now();
     let mut last_progress_pct = 15.0;
 
@@ -357,7 +376,7 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", overall_pct),
+                stage: format!("AI Upscaling on {} GPU — {:.0}%", chip, overall_pct),
                 percent: overall_pct,
                 current_frame: completed.min(frame_count),
                 total_frames: frame_count,
@@ -553,6 +572,7 @@ where
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
+    let chip = detect_hardware_chip();
     let start_time = Instant::now();
     let mut last_progress_pct = 10.0;
 
@@ -598,7 +618,7 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!("AI Upscaling on Apple GPU (M4) — {:.0}%", overall_pct),
+                stage: format!("AI Upscaling on {} GPU — {:.0}%", chip, overall_pct),
                 percent: overall_pct,
                 current_frame: completed.min(actual_frames),
                 total_frames: actual_frames,

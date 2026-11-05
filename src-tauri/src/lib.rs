@@ -19,6 +19,7 @@ pub struct SystemCapabilities {
     pub os: String,
     pub arch: String,
     pub has_apple_silicon: bool,
+    pub chip_name: String,
 }
 
 #[tauri::command]
@@ -26,11 +27,13 @@ fn get_system_capabilities() -> SystemCapabilities {
     let arch = std::env::consts::ARCH.to_string();
     let os = std::env::consts::OS.to_string();
     let has_apple_silicon = os == "macos" && (arch == "aarch64" || arch == "arm64");
+    let chip_name = pipeline::detect_hardware_chip();
 
     SystemCapabilities {
         os,
         arch,
         has_apple_silicon,
+        chip_name,
     }
 }
 

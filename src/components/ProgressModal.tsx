@@ -93,7 +93,9 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
         {!isDone && !error && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-zinc-400 text-[11px]">Processing on Apple GPU (M4)</span>
+              <span className="text-zinc-400 text-[11px]">
+                {progress?.stage ? progress.stage.split("—")[0].trim() : "Processing with GPU..."}
+              </span>
               <span className="text-[#38BDF8] font-bold text-sm tabular-nums">
                 {percent.toFixed(0)}%
               </span>
