@@ -9,7 +9,7 @@ export interface Preset {
 }
 
 export interface PresetSettings {
-  targetResolution: "1080p" | "4k";
+  scaleFactor: 2 | 4;
   faceRestore: boolean;
   deinterlace: boolean;
 }
@@ -31,6 +31,8 @@ export interface PreviewMedia {
   enhancedUrl: string;
   outputWidth: number;
   outputHeight: number;
+  duration: number;
+  isFullVideo?: boolean;
 }
 
 export interface RenderProgressPayload {

@@ -10,7 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 export default function App() {
   const [activePresetId, setActivePresetId] = useState<PresetId>("vhs");
   const [settings, setSettings] = useState<PresetSettings>({
-    targetResolution: "1080p",
+    scaleFactor: 2,
     faceRestore: true,
     deinterlace: true,
   });
@@ -187,7 +187,7 @@ export default function App() {
     setIsModalOpen(true);
 
     try {
-      const scale = settings.targetResolution === "4k" ? 4 : 2;
+      const scale = settings.scaleFactor;
       const res = await invoke<{
         original_path: string;
         enhanced_path: string;
@@ -206,6 +206,8 @@ export default function App() {
         enhancedUrl: convertFileSrc(res.enhanced_path),
         outputWidth: res.output_width,
         outputHeight: res.output_height,
+        duration: res.duration || 3.0,
+        isFullVideo: false,
       });
       setIsPlaying(true);
       // Close modal on preview success so user can immediately view split-screen slider
@@ -237,7 +239,7 @@ export default function App() {
     setIsModalOpen(true);
 
     try {
-      const scale = settings.targetResolution === "4k" ? 4 : 2;
+      const scale = settings.scaleFactor;
       const res = await invoke<string>("upscale_video", {
         inputPath: video.path,
         outputPath: "",
@@ -266,16 +268,18 @@ export default function App() {
   // Open Before/After Comparison view for upscaled video
   const handleCompareResult = useCallback(() => {
     if (!video || !completedPath) return;
-    const scale = settings.targetResolution === "4k" ? 4 : 2;
+    const scale = settings.scaleFactor;
     setPreviewMedia({
       originalUrl: video.srcUrl,
       enhancedUrl: convertFileSrc(completedPath),
       outputWidth: video.width * scale,
       outputHeight: video.height * scale,
+      duration: video.duration,
+      isFullVideo: true,
     });
     setIsModalOpen(false);
     setIsPlaying(true);
-  }, [video, completedPath, settings.targetResolution]);
+  }, [video, completedPath, settings.scaleFactor]);
 
   // Load upscaled video as the new input to allow re-upscaling or applying more presets
   const handleUseUpscaledAsSource = useCallback(
