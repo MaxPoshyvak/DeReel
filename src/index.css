@@ -2,21 +2,119 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: dark;
+  --bg-shell: #09090b;
+  --bg-canvas: #111115;
+  --bg-card: #18181d;
+  --bg-card-hover: #22222a;
+  --bg-glass: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-active: rgba(255, 255, 255, 0.22);
+  --accent-cyan: #38bdf8;
+  --accent-blue: #3b82f6;
+  --accent-emerald: #10b981;
+}
+
 @layer base {
   body {
-    @apply bg-[#09090b] text-zinc-100 min-h-screen overflow-x-hidden font-sans;
+    background-color: var(--bg-shell);
+    color: #f4f4f6;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Geist Sans", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
-/* Glassmorphism utility */
-.glass-panel {
-  background: rgba(24, 24, 27, 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* Tauri window dragging support for macOS */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
 }
 
-.glass-panel-hover:hover {
-  background: rgba(39, 39, 42, 0.75);
-  border-color: rgba(139, 92, 246, 0.4);
+button, input, a, select, [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+/* Tabular numbers for telemetry, timers and frame rates */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+/* Native pro-slider range input */
+input[type="range"].pro-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+input[type="range"].pro-slider:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+input[type="range"].pro-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  border: 0;
+}
+
+input[type="range"].pro-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  margin-top: -4px;
+  transition: transform 0.1s ease;
+}
+
+input[type="range"].pro-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+input[type="range"].pro-slider::-moz-range-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  border: 0;
+}
+
+input[type="range"].pro-slider::-moz-range-progress {
+  height: 4px;
+  background: var(--accent-cyan);
+  border-radius: 9999px;
+}
+
+input[type="range"].pro-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+/* Subtle dot pattern for empty drop zone */
+.bg-grid-subtle {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
 }

@@ -13,12 +13,14 @@
     "windows": [
       {
         "title": "DeReel",
-        "width": 1180,
-        "height": 820,
-        "minWidth": 960,
-        "minHeight": 680,
+        "width": 1240,
+        "height": 840,
+        "minWidth": 980,
+        "minHeight": 700,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
