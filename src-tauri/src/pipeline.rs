@@ -62,14 +62,69 @@ struct FFprobeOutput {
 }
 
 fn get_binary_path() -> PathBuf {
-    let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if path.ends_with("src-tauri") {
-        path.push("binaries");
-    } else {
-        path.push("src-tauri");
-        path.push("binaries");
+    // 1. Packaged macOS .app bundle: Contents/MacOS/DeReel -> Contents/Resources/binaries
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let bundle_res = exe_dir.join("../Resources/binaries");
+            if bundle_res.exists() {
+                return bundle_res;
+            }
+            let next_to_exe = exe_dir.join("binaries");
+            if next_to_exe.exists() {
+                return next_to_exe;
+            }
+        }
     }
-    path
+
+    // 2. Dev mode / workspace fallbacks
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if cwd.ends_with("src-tauri") {
+        let p = cwd.join("binaries");
+        if p.exists() {
+            return p;
+        }
+    }
+    let p = cwd.join("src-tauri").join("binaries");
+    if p.exists() {
+        return p;
+    }
+    cwd.join("binaries")
+}
+
+pub fn resolve_ffmpeg_bin() -> PathBuf {
+    let bundled = get_binary_path().join("ffmpeg");
+    if bundled.exists() {
+        return bundled;
+    }
+    for p in &[
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    ] {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return pb;
+        }
+    }
+    PathBuf::from("ffmpeg")
+}
+
+pub fn resolve_ffprobe_bin() -> PathBuf {
+    let bundled = get_binary_path().join("ffprobe");
+    if bundled.exists() {
+        return bundled;
+    }
+    for p in &[
+        "/opt/homebrew/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        "/usr/bin/ffprobe",
+    ] {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return pb;
+        }
+    }
+    PathBuf::from("ffprobe")
 }
 
 pub fn detect_hardware_chip() -> String {
@@ -103,7 +158,7 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
 
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-    let output = Command::new("ffprobe")
+    let output = Command::new(resolve_ffprobe_bin())
         .args([
             "-v",
             "quiet",
@@ -287,7 +342,7 @@ where
     };
 
     // 1. Extract 3s reference MP4 for side-by-side player
-    let mut original_extract = Command::new("ffmpeg")
+    let mut original_extract = Command::new(resolve_ffmpeg_bin())
         .args([
             "-y",
             "-ss",
@@ -332,7 +387,7 @@ where
     } else {
         frames_in_dir.join("frame_%04d.jpg")
     };
-    let mut extract_frames = Command::new("ffmpeg")
+    let mut extract_frames = Command::new(resolve_ffmpeg_bin())
         .args([
             "-y",
             "-ss",
@@ -595,7 +650,7 @@ where
         frames_out_dir.join("frame_%04d.jpg")
     };
 
-    let mut encode_cmd = Command::new("ffmpeg");
+    let mut encode_cmd = Command::new(resolve_ffmpeg_bin());
     encode_cmd.args([
         "-y",
         "-r",
@@ -719,7 +774,7 @@ where
     } else {
         frames_in_dir.join("frame_%06d.jpg")
     };
-    let mut extract_child = Command::new("ffmpeg")
+    let mut extract_child = Command::new(resolve_ffmpeg_bin())
         .args([
             "-y",
             "-i",
@@ -984,7 +1039,7 @@ where
         frames_out_dir.join("frame_%06d.jpg")
     };
 
-    let mut encode_cmd = Command::new("ffmpeg");
+    let mut encode_cmd = Command::new(resolve_ffmpeg_bin());
     encode_cmd.args([
         "-y",
         "-r",
