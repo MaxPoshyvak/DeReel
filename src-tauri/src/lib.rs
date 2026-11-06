@@ -50,6 +50,7 @@ async fn render_preview(
     start_sec: f64,
     scale: u32,
     deinterlace: bool,
+    preset: Option<String>,
 ) -> Result<PreviewOutput, String> {
     let cancel_flag = state.cancel_flag.clone();
     cancel_flag.store(false, Ordering::Relaxed);
@@ -61,6 +62,7 @@ async fn render_preview(
             start_sec,
             scale,
             deinterlace,
+            preset.as_deref(),
             move |progress: RenderProgress| {
                 let _ = app_clone.emit("render-progress", &progress);
             },
@@ -79,6 +81,7 @@ async fn upscale_video(
     output_path: String,
     scale: u32,
     deinterlace: bool,
+    preset: Option<String>,
 ) -> Result<String, String> {
     let cancel_flag = state.cancel_flag.clone();
     cancel_flag.store(false, Ordering::Relaxed);
@@ -90,6 +93,7 @@ async fn upscale_video(
             &output_path,
             scale,
             deinterlace,
+            preset.as_deref(),
             move |progress: RenderProgress| {
                 let _ = app_clone.emit("render-progress", &progress);
             },

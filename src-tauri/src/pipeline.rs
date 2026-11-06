@@ -183,6 +183,7 @@ pub fn execute_preview_pipeline<F>(
     start_sec: f64,
     scale: u32,
     deinterlace: bool,
+    preset: Option<&str>,
     progress: F,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<PreviewOutput, String>
@@ -308,6 +309,10 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
+    let model_name = match preset.unwrap_or("vhs") {
+        "anime" => "realesr-animevideov3",
+        _ => "realesr-general-x4v3",
+    };
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -320,7 +325,7 @@ where
             "-m",
             models_dir.to_str().unwrap(),
             "-n",
-            "realesr-animevideov3",
+            model_name,
             "-j",
             "2:2:2",
             "-f",
@@ -459,6 +464,7 @@ pub fn execute_full_upscale_pipeline<F>(
     output_path: &str,
     scale: u32,
     deinterlace: bool,
+    preset: Option<&str>,
     progress: F,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<String, String>
@@ -550,6 +556,10 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
+    let model_name = match preset.unwrap_or("vhs") {
+        "anime" => "realesr-animevideov3",
+        _ => "realesr-general-x4v3",
+    };
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -562,7 +572,7 @@ where
             "-m",
             models_dir.to_str().unwrap(),
             "-n",
-            "realesr-animevideov3",
+            model_name,
             "-j",
             "2:2:2",
             "-f",

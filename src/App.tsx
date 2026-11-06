@@ -199,6 +199,7 @@ export default function App() {
         startSec: currentTime,
         scale,
         deinterlace: settings.deinterlace,
+        preset: activePresetId,
       });
 
       setPreviewMedia({
@@ -245,6 +246,7 @@ export default function App() {
         outputPath: "",
         scale,
         deinterlace: settings.deinterlace,
+        preset: activePresetId,
       });
 
       setCompletedPath(res);
@@ -342,6 +344,15 @@ export default function App() {
     }
   };
 
+  const handleSelectPreset = useCallback((id: PresetId) => {
+    setActivePresetId(id);
+    if (id === "vhs") {
+      setSettings((prev) => ({ ...prev, deinterlace: true }));
+    } else {
+      setSettings((prev) => ({ ...prev, deinterlace: false }));
+    }
+  }, []);
+
   return (
     <div
       data-tauri-drag-region
@@ -351,7 +362,7 @@ export default function App() {
       {/* Zone 1: Preset Sidebar (260px) */}
       <PresetSidebar
         activePresetId={activePresetId}
-        onSelectPreset={setActivePresetId}
+        onSelectPreset={handleSelectPreset}
       />
 
       {/* Zone 2: Main Video Workspace Island */}
