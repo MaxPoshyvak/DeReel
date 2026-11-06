@@ -13,9 +13,10 @@ import {
   FolderOpen,
   ZoomIn,
 } from "lucide-react";
-import { PresetSettings, PreviewMedia, VideoMetadata } from "../types";
+import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
 interface WorkspaceIslandProps {
+  activePresetId: PresetId;
   video: VideoMetadata | null;
   onSelectFile: (file: File) => void;
   onBrowseFile: () => void;
@@ -41,6 +42,7 @@ interface WorkspaceIslandProps {
 }
 
 export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
+  activePresetId,
   video,
   onSelectFile,
   onBrowseFile,
@@ -74,6 +76,15 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
+
+  const isFps60 = activePresetId === "fps60";
+  const targetFps = isFps60
+    ? settings.fpsTarget === "2x"
+      ? (video ? video.fps * 2 : 60)
+      : settings.fpsTarget === 120
+      ? 120
+      : 60
+    : (video ? video.fps : 30);
 
   // Comparison playback time (isolated from global time to prevent 3s preview desync)
   const [comparisonTime, setComparisonTime] = useState(0);
@@ -457,6 +468,45 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     <span>Exit Comparison</span>
                   </button>
                 </>
+              ) : isFps60 ? (
+                /* 60 FPS Target Switcher */
+                <div className="flex items-center space-x-1 p-0.5 rounded-lg bg-black/40 border border-white/[0.06]">
+                  <button
+                    onClick={() => onChangeSettings({ fpsTarget: 60 })}
+                    className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
+                      (settings.fpsTarget ?? 60) === 60
+                        ? "bg-white text-zinc-950 font-semibold shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                    title="Smooth video to standard 60.0 FPS"
+                  >
+                    60 FPS
+                  </button>
+
+                  <button
+                    onClick={() => onChangeSettings({ fpsTarget: "2x" })}
+                    className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
+                      settings.fpsTarget === "2x"
+                        ? "bg-white text-zinc-950 font-semibold shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                    title={`Double frame rate to ${(video.fps * 2).toFixed(1)} FPS`}
+                  >
+                    2× FPS ({(video.fps * 2).toFixed(1)})
+                  </button>
+
+                  <button
+                    onClick={() => onChangeSettings({ fpsTarget: 120 })}
+                    className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
+                      settings.fpsTarget === 120
+                        ? "bg-white text-zinc-950 font-semibold shadow-sm"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                    title="Interpolate to 120 FPS for ProMotion / 120Hz displays"
+                  >
+                    120 FPS
+                  </button>
+                </div>
               ) : (
                 /* Clear 2x & 4x Scale Factor Switcher (No confusing 1080p/4k labels) */
                 <div className="flex items-center space-x-1 p-0.5 rounded-lg bg-black/40 border border-white/[0.06]">
@@ -569,12 +619,16 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
 
                 {/* Floating Top Badges */}
                 <div className="absolute top-3 left-3 px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10 text-[10.5px] font-mono text-zinc-400 pointer-events-none z-30">
-                  Original ({video.width}×{video.height})
+                  {isFps60
+                    ? `Original (${video.fps.toFixed(1)} FPS)`
+                    : `Original (${video.width}×${video.height})`}
                 </div>
                 <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-[#18181D]/80 backdrop-blur-md border border-white/15 text-[10.5px] font-mono text-[#38BDF8] pointer-events-none flex items-center space-x-1 z-30">
                   <Sparkles className="w-3 h-3 text-[#38BDF8]" />
                   <span>
-                    AI Restored ({previewMedia.outputWidth}×{previewMedia.outputHeight})
+                    {isFps60
+                      ? `AI Smooth (${targetFps.toFixed(1)} FPS)`
+                      : `AI Restored (${previewMedia.outputWidth}×${previewMedia.outputHeight})`}
                   </span>
                 </div>
 
@@ -691,7 +745,9 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                 </span>
                 <span className="text-zinc-600">•</span>
                 <span className="text-zinc-300">
-                  {video.width}×{video.height} ➔ {previewMedia.outputWidth}×{previewMedia.outputHeight}
+                  {isFps60
+                    ? `${video.fps.toFixed(1)} FPS ➔ ${targetFps.toFixed(1)} FPS (${video.width}×${video.height})`
+                    : `${video.width}×${video.height} ➔ ${previewMedia.outputWidth}×${previewMedia.outputHeight}`}
                 </span>
               </div>
 
@@ -725,7 +781,11 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
                   >
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    <span>Start Full Upscale ({settings.scaleFactor}×)</span>
+                    <span>
+                      {isFps60
+                        ? `Start Smoothing (${targetFps.toFixed(0)} FPS)`
+                        : `Start Full Upscale (${settings.scaleFactor}×)`}
+                    </span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -741,7 +801,9 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     Target Output
                   </div>
                   <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                    {video.width * settings.scaleFactor} × {video.height * settings.scaleFactor}
+                    {isFps60
+                      ? `${video.width} × ${video.height}`
+                      : `${video.width * settings.scaleFactor} × ${video.height * settings.scaleFactor}`}
                   </div>
                 </div>
 
@@ -749,17 +811,17 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
                     Target FPS
                   </div>
-                  <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                    {video.fps.toFixed(1)} FPS
+                  <div className="text-[11.5px] font-mono font-semibold text-sky-400 tabular-nums">
+                    {targetFps.toFixed(1)} FPS
                   </div>
                 </div>
 
                 <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[70px]">
                   <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                    Scale
+                    {isFps60 ? "Engine" : "Scale"}
                   </div>
                   <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                    {settings.scaleFactor}×
+                    {isFps60 ? "RIFE v4.6" : `${settings.scaleFactor}×`}
                   </div>
                 </div>
               </div>
@@ -788,12 +850,16 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   {isUpscaling ? (
                     <>
                       <RotateCcw className="w-3.5 h-3.5 animate-spin text-white" />
-                      <span>Upscaling...</span>
+                      <span>{isFps60 ? "Smoothing..." : "Upscaling..."}</span>
                     </>
                   ) : (
                     <>
                       <Zap className="w-3.5 h-3.5 fill-current" />
-                      <span>Start Upscale ({settings.scaleFactor}×)</span>
+                      <span>
+                        {isFps60
+                          ? `Start Smoothing (${targetFps.toFixed(0)} FPS)`
+                          : `Start Upscale (${settings.scaleFactor}×)`}
+                      </span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </>
                   )}

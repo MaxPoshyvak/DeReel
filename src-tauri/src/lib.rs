@@ -42,6 +42,8 @@ fn probe_video(path: String) -> Result<VideoMetadata, String> {
     probe_video_file(&path)
 }
 
+// Tauri IPC command accepting individual properties from frontend invoke
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn render_preview(
     app: tauri::AppHandle,
@@ -51,6 +53,7 @@ async fn render_preview(
     scale: u32,
     deinterlace: bool,
     preset: Option<String>,
+    target_fps: Option<f64>,
 ) -> Result<PreviewOutput, String> {
     let cancel_flag = state.cancel_flag.clone();
     cancel_flag.store(false, Ordering::Relaxed);
@@ -63,6 +66,7 @@ async fn render_preview(
             scale,
             deinterlace,
             preset.as_deref(),
+            target_fps,
             move |progress: RenderProgress| {
                 let _ = app_clone.emit("render-progress", &progress);
             },
@@ -73,6 +77,8 @@ async fn render_preview(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+// Tauri IPC command accepting individual properties from frontend invoke
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn upscale_video(
     app: tauri::AppHandle,
@@ -82,6 +88,7 @@ async fn upscale_video(
     scale: u32,
     deinterlace: bool,
     preset: Option<String>,
+    target_fps: Option<f64>,
 ) -> Result<String, String> {
     let cancel_flag = state.cancel_flag.clone();
     cancel_flag.store(false, Ordering::Relaxed);
@@ -94,6 +101,7 @@ async fn upscale_video(
             scale,
             deinterlace,
             preset.as_deref(),
+            target_fps,
             move |progress: RenderProgress| {
                 let _ = app_clone.emit("render-progress", &progress);
             },

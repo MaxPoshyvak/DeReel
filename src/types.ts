@@ -8,8 +8,11 @@ export interface Preset {
   models: string[];
 }
 
+export type FpsTargetOption = 60 | "2x" | 120;
+
 export interface PresetSettings {
   scaleFactor: 2 | 4;
+  fpsTarget?: FpsTargetOption;
   faceRestore: boolean;
   deinterlace: boolean;
 }

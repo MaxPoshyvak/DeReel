@@ -16,11 +16,19 @@ export default function App() {
   );
   const [settings, setSettings] = useState<PresetSettings>({
     scaleFactor: 2,
+    fpsTarget: 60,
     faceRestore: true,
     deinterlace: true,
   });
 
   const [video, setVideo] = useState<VideoMetadata | null>(null);
+
+  const computedTargetFps = useMemo(() => {
+    if (activePresetId !== "fps60" || !video) return video?.fps || 30.0;
+    if (settings.fpsTarget === "2x") return video.fps * 2;
+    if (settings.fpsTarget === 120) return 120.0;
+    return 60.0;
+  }, [activePresetId, settings.fpsTarget, video]);
   const [sliderPos, setSliderPos] = useState<number>(50);
   const [currentTime, setCurrentTime] = useState<number>(0.0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -232,6 +240,7 @@ export default function App() {
         scale,
         deinterlace: settings.deinterlace,
         preset: activePresetId,
+        targetFps: activePresetId === "fps60" ? computedTargetFps : null,
       });
 
       setPreviewMedia({
@@ -252,7 +261,15 @@ export default function App() {
     } finally {
       setIsProcessingPreview(false);
     }
-  }, [video, isProcessingPreview, isUpscaling, currentTime, settings]);
+  }, [
+    video,
+    isProcessingPreview,
+    isUpscaling,
+    currentTime,
+    settings,
+    activePresetId,
+    computedTargetFps,
+  ]);
 
   // Execute Full Video AI Upscale
   const handleStartUpscale = useCallback(async () => {
@@ -279,6 +296,7 @@ export default function App() {
         scale,
         deinterlace: settings.deinterlace,
         preset: activePresetId,
+        targetFps: activePresetId === "fps60" ? computedTargetFps : null,
       });
 
       setCompletedPath(res);
@@ -297,7 +315,14 @@ export default function App() {
     } finally {
       setIsUpscaling(false);
     }
-  }, [video, isUpscaling, isProcessingPreview, settings]);
+  }, [
+    video,
+    isUpscaling,
+    isProcessingPreview,
+    settings,
+    activePresetId,
+    computedTargetFps,
+  ]);
 
   // Open Before/After Comparison view for upscaled video
   const handleCompareResult = useCallback(() => {
@@ -427,6 +452,7 @@ export default function App() {
 
       {/* Zone 2: Main Video Workspace Island */}
       <WorkspaceIsland
+        activePresetId={activePresetId}
         video={video}
         onSelectFile={handleSelectFile}
         onBrowseFile={handleBrowseFile}

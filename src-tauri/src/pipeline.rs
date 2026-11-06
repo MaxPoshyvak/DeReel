@@ -182,7 +182,7 @@ pub fn resolve_model_for_preset(preset: Option<&str>) -> &'static str {
     match preset.unwrap_or("vhs") {
         "anime" => "realesr-animevideov3",
         "lowres" => "realesrgan-x4plus",
-        "fps60" => "realesr-general-x4v3",
+        "fps60" => "rife-v4.6",
         "vhs" => "realesr-general-x4v3",
         _ => "realesr-general-x4v3",
     }
@@ -207,15 +207,22 @@ pub fn compute_output_path(
         "anime" => "anime",
         other => other,
     };
-    parent.join(format!("{}_dereel_{}_{}x.mp4", stem, preset_slug, scale))
+    if preset_slug == "60fps" {
+        parent.join(format!("{}_dereel_{}fps.mp4", stem, scale))
+    } else {
+        parent.join(format!("{}_dereel_{}_{}x.mp4", stem, preset_slug, scale))
+    }
 }
 
+// Explicit pipeline arguments needed for video processing stages
+#[allow(clippy::too_many_arguments)]
 pub fn execute_preview_pipeline<F>(
     input_path: &str,
     start_sec: f64,
     scale: u32,
     deinterlace: bool,
     preset: Option<&str>,
+    target_fps_opt: Option<f64>,
     progress: F,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<PreviewOutput, String>
@@ -223,6 +230,14 @@ where
     F: Fn(RenderProgress) + Send + Sync + 'static,
 {
     let meta = probe_video_file(input_path)?;
+    let is_fps60 = preset == Some("fps60");
+    let target_fps = if is_fps60 {
+        target_fps_opt.unwrap_or(if scale == 4 { 120.0 } else { 60.0 })
+    } else if meta.fps > 0.0 {
+        meta.fps
+    } else {
+        29.97
+    };
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -295,7 +310,11 @@ where
     }
 
     // 2. Extract frames for neural inference with fast high-quality JPEG
-    let frame_pattern = frames_in_dir.join("frame_%04d.jpg");
+    let frame_pattern = if is_fps60 {
+        frames_in_dir.join("%08d.jpg")
+    } else {
+        frames_in_dir.join("frame_%04d.jpg")
+    };
     let mut extract_frames = Command::new("ffmpeg")
         .args([
             "-y",
@@ -327,119 +346,237 @@ where
         .unwrap_or(72)
         .max(1);
 
-    progress(RenderProgress {
-        stage: "Upscaling frames...".to_string(),
-        percent: 15.0,
-        current_frame: 0,
-        total_frames: frame_count,
-        fps: 0.0,
-        eta_seconds: 5,
-    });
-
-    // Stage 2: Run Real-ESRGAN on Apple GPU with live progress parsing
     let bin_dir = get_binary_path();
-    let runner = bin_dir.join("realesrgan-ncnn-vulkan");
-    let models_dir = bin_dir.join("models");
-    let model_name = resolve_model_for_preset(preset);
 
-    // Run neural model at its native 4x scale to completely avoid ncnn tile-stitching offset bugs
-    let mut ai_child = Command::new(&runner)
-        .args([
-            "-i",
-            frames_in_dir.to_str().unwrap(),
-            "-o",
-            frames_out_dir.to_str().unwrap(),
-            "-s",
-            "4",
-            "-m",
-            models_dir.to_str().unwrap(),
-            "-n",
-            model_name,
-            "-j",
-            "2:2:2",
-            "-f",
-            "jpg",
-        ])
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
+    if is_fps60 {
+        // Stage 2: RIFE Motion Interpolation on Apple GPU
+        let rife_runner = bin_dir.join("rife-ncnn-vulkan");
+        let rife_model_dir = bin_dir.join("models").join("rife-v4.6");
 
-    let start_time = Instant::now();
-    let mut last_progress_pct = 15.0;
+        let target_frames = if (target_fps - (meta.fps * 2.0)).abs() < 1.0 {
+            frame_count * 2
+        } else {
+            ((frame_count as f64) * (target_fps / meta.fps)).round() as u32
+        }
+        .max(frame_count + 1);
 
-    if let Some(stderr) = ai_child.stderr.take() {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
+        progress(RenderProgress {
+            stage: format!(
+                "Interpolating motion ({} FPS)...",
+                target_fps.round() as u32
+            ),
+            percent: 15.0,
+            current_frame: 0,
+            total_frames: target_frames,
+            fps: 0.0,
+            eta_seconds: 5,
+        });
+
+        let mut ai_child = Command::new(&rife_runner)
+            .args([
+                "-i",
+                frames_in_dir.to_str().unwrap(),
+                "-o",
+                frames_out_dir.to_str().unwrap(),
+                "-n",
+                &target_frames.to_string(),
+                "-m",
+                rife_model_dir.to_str().unwrap(),
+                "-f",
+                "%08d.jpg",
+                "-j",
+                "2:2:2",
+            ])
+            .spawn()
+            .map_err(|e| format!("Failed to spawn RIFE runner: {}", e))?;
+
+        let start_time = Instant::now();
+        let mut last_progress_pct = 15.0;
+
+        loop {
             if cancel_flag.load(Ordering::Relaxed) {
                 let _ = ai_child.kill();
                 let _ = fs::remove_dir_all(&temp_dir);
                 return Err("Operation cancelled by user".to_string());
             }
 
-            let completed = fs::read_dir(&frames_out_dir)
-                .map(|r| r.count() as u32)
-                .unwrap_or(0);
+            match ai_child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        let _ = fs::remove_dir_all(&temp_dir);
+                        return Err("RIFE motion interpolation encountered an error".to_string());
+                    }
+                    break;
+                }
+                Ok(None) => {
+                    let completed = fs::read_dir(&frames_out_dir)
+                        .map(|r| r.count() as u32)
+                        .unwrap_or(0);
+                    let overall_pct =
+                        (15.0 + (completed as f64 / target_frames as f64) * 75.0).min(90.0);
+                    if overall_pct > last_progress_pct {
+                        last_progress_pct = overall_pct;
+                    }
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    let fps = if elapsed > 0.5 {
+                        completed as f64 / elapsed
+                    } else {
+                        0.0
+                    };
+                    let eta = if fps > 0.1 && completed < target_frames {
+                        ((target_frames - completed) as f64 / fps) as u32
+                    } else {
+                        0
+                    };
 
-            let pct_in_frame = if line.contains('%') {
-                line.split('%')
-                    .next()
-                    .and_then(|s| s.split_whitespace().last())
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            };
+                    progress(RenderProgress {
+                        stage: format!(
+                            "Interpolating motion ({} FPS)...",
+                            target_fps.round() as u32
+                        ),
+                        percent: last_progress_pct,
+                        current_frame: completed.min(target_frames),
+                        total_frames: target_frames,
+                        fps,
+                        eta_seconds: eta,
+                    });
 
-            let frame_progress =
-                (completed as f64 + (pct_in_frame / 100.0)).min(frame_count as f64);
-            let calculated_pct = 15.0 + (frame_progress / frame_count as f64) * 70.0;
-            let overall_pct = calculated_pct.max(last_progress_pct);
-            last_progress_pct = overall_pct;
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                Err(e) => {
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Err(format!("Error monitoring RIFE: {}", e));
+                }
+            }
+        }
+    } else {
+        // Stage 2: Run Real-ESRGAN on Apple GPU with live progress parsing
+        progress(RenderProgress {
+            stage: "Upscaling frames...".to_string(),
+            percent: 15.0,
+            current_frame: 0,
+            total_frames: frame_count,
+            fps: 0.0,
+            eta_seconds: 5,
+        });
 
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let fps = if elapsed > 0.5 {
-                completed as f64 / elapsed
-            } else {
-                0.0
-            };
-            let eta = if fps > 0.1 && completed < frame_count {
-                ((frame_count - completed) as f64 / fps) as u32
-            } else {
-                0
-            };
+        let runner = bin_dir.join("realesrgan-ncnn-vulkan");
+        let models_dir = bin_dir.join("models");
+        let model_name = resolve_model_for_preset(preset);
 
-            progress(RenderProgress {
-                stage: "Upscaling frames...".to_string(),
-                percent: overall_pct,
-                current_frame: completed.min(frame_count),
-                total_frames: frame_count,
-                fps,
-                eta_seconds: eta,
-            });
+        let mut ai_child = Command::new(&runner)
+            .args([
+                "-i",
+                frames_in_dir.to_str().unwrap(),
+                "-o",
+                frames_out_dir.to_str().unwrap(),
+                "-s",
+                "4",
+                "-m",
+                models_dir.to_str().unwrap(),
+                "-n",
+                model_name,
+                "-j",
+                "2:2:2",
+                "-f",
+                "jpg",
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
+
+        let start_time = Instant::now();
+        let mut last_progress_pct = 15.0;
+
+        if let Some(stderr) = ai_child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    let _ = ai_child.kill();
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Err("Operation cancelled by user".to_string());
+                }
+
+                let completed = fs::read_dir(&frames_out_dir)
+                    .map(|r| r.count() as u32)
+                    .unwrap_or(0);
+
+                let pct_in_frame = if line.contains('%') {
+                    line.split('%')
+                        .next()
+                        .and_then(|s| s.split_whitespace().last())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+
+                let frame_progress =
+                    (completed as f64 + (pct_in_frame / 100.0)).min(frame_count as f64);
+                let calculated_pct = 15.0 + (frame_progress / frame_count as f64) * 70.0;
+                let overall_pct = calculated_pct.max(last_progress_pct);
+                last_progress_pct = overall_pct;
+
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let fps = if elapsed > 0.5 {
+                    completed as f64 / elapsed
+                } else {
+                    0.0
+                };
+                let eta = if fps > 0.1 && completed < frame_count {
+                    ((frame_count - completed) as f64 / fps) as u32
+                } else {
+                    0
+                };
+
+                progress(RenderProgress {
+                    stage: "Upscaling frames...".to_string(),
+                    percent: overall_pct,
+                    current_frame: completed.min(frame_count),
+                    total_frames: frame_count,
+                    fps,
+                    eta_seconds: eta,
+                });
+            }
+        }
+
+        let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
+        if !ai_status.success() {
+            return Err("AI upscaling process encountered an error".to_string());
         }
     }
 
-    let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
-    if !ai_status.success() {
-        return Err("AI upscaling process encountered an error".to_string());
-    }
+    // Stage 3: Encode output frames using hardware VideoToolbox
+    let total_out_frames = fs::read_dir(&frames_out_dir)
+        .map(|r| r.count() as u32)
+        .unwrap_or(frame_count);
 
-    // Stage 3: Encode upscaled frames using hardware VideoToolbox
     progress(RenderProgress {
         stage: "Encoding video...".to_string(),
         percent: 92.0,
-        current_frame: frame_count,
-        total_frames: frame_count,
+        current_frame: total_out_frames,
+        total_frames: total_out_frames,
         fps: 30.0,
         eta_seconds: 1,
     });
 
     let scale_multiplier = if scale == 4 { 4 } else { 2 };
-    let output_width = ((meta.width * scale_multiplier) / 2) * 2;
-    let output_height = ((meta.height * scale_multiplier) / 2) * 2;
+    let output_width = if is_fps60 {
+        meta.width
+    } else {
+        ((meta.width * scale_multiplier) / 2) * 2
+    };
+    let output_height = if is_fps60 {
+        meta.height
+    } else {
+        ((meta.height * scale_multiplier) / 2) * 2
+    };
 
-    let out_pattern = frames_out_dir.join("frame_%04d.jpg");
-    let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
+    let out_pattern = if is_fps60 {
+        frames_out_dir.join("%08d.jpg")
+    } else {
+        frames_out_dir.join("frame_%04d.jpg")
+    };
 
     let mut encode_cmd = Command::new("ffmpeg");
     encode_cmd.args([
@@ -450,8 +587,8 @@ where
         out_pattern.to_str().unwrap(),
     ]);
 
-    // If 2x was chosen, downscale native 4x neural output via high-quality Lanczos supersampling
-    if scale == 2 {
+    // If 2x was chosen on spatial model, downscale native 4x neural output via Lanczos supersampling
+    if !is_fps60 && scale == 2 {
         encode_cmd.args([
             "-vf",
             &format!("scale={}:{}:flags=lanczos", output_width, output_height),
@@ -486,8 +623,8 @@ where
     progress(RenderProgress {
         stage: "Complete!".to_string(),
         percent: 100.0,
-        current_frame: frame_count,
-        total_frames: frame_count,
+        current_frame: total_out_frames,
+        total_frames: total_out_frames,
         fps: 0.0,
         eta_seconds: 0,
     });
@@ -501,12 +638,15 @@ where
     })
 }
 
+// Explicit pipeline arguments needed for full video rendering stages
+#[allow(clippy::too_many_arguments)]
 pub fn execute_full_upscale_pipeline<F>(
     input_path: &str,
     output_path: &str,
     scale: u32,
     deinterlace: bool,
     preset: Option<&str>,
+    target_fps_opt: Option<f64>,
     progress: F,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<String, String>
@@ -514,7 +654,20 @@ where
     F: Fn(RenderProgress) + Send + Sync + 'static,
 {
     let meta = probe_video_file(input_path)?;
-    let final_dest = compute_output_path(input_path, output_path, preset, scale);
+    let is_fps60 = preset == Some("fps60");
+    let target_fps = if is_fps60 {
+        target_fps_opt.unwrap_or(if scale == 4 { 120.0 } else { 60.0 })
+    } else if meta.fps > 0.0 {
+        meta.fps
+    } else {
+        29.97
+    };
+
+    let final_dest = if is_fps60 {
+        compute_output_path(input_path, output_path, preset, target_fps.round() as u32)
+    } else {
+        compute_output_path(input_path, output_path, preset, scale)
+    };
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -544,7 +697,11 @@ where
         eta_seconds: 15,
     });
 
-    let frame_pattern = frames_in_dir.join("frame_%06d.jpg");
+    let frame_pattern = if is_fps60 {
+        frames_in_dir.join("%08d.jpg")
+    } else {
+        frames_in_dir.join("frame_%06d.jpg")
+    };
     let mut extract_child = Command::new("ffmpeg")
         .args([
             "-y",
@@ -577,119 +734,238 @@ where
         .unwrap_or(total_est_frames)
         .max(1);
 
-    progress(RenderProgress {
-        stage: "Upscaling frames...".to_string(),
-        percent: 10.0,
-        current_frame: 0,
-        total_frames: actual_frames,
-        fps: 0.0,
-        eta_seconds: (actual_frames as f64 / 2.0) as u32,
-    });
-
     let bin_dir = get_binary_path();
-    let runner = bin_dir.join("realesrgan-ncnn-vulkan");
-    let models_dir = bin_dir.join("models");
-    let model_name = resolve_model_for_preset(preset);
 
-    // Run neural model at native 4x scale to avoid ncnn tile-stitching offset bugs
-    let mut ai_child = Command::new(&runner)
-        .args([
-            "-i",
-            frames_in_dir.to_str().unwrap(),
-            "-o",
-            frames_out_dir.to_str().unwrap(),
-            "-s",
-            "4",
-            "-m",
-            models_dir.to_str().unwrap(),
-            "-n",
-            model_name,
-            "-j",
-            "2:2:2",
-            "-f",
-            "jpg",
-        ])
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
+    if is_fps60 {
+        // Stage 2: RIFE Motion Interpolation on Apple GPU
+        let rife_runner = bin_dir.join("rife-ncnn-vulkan");
+        let rife_model_dir = bin_dir.join("models").join("rife-v4.6");
 
-    let start_time = Instant::now();
-    let mut last_progress_pct = 10.0;
+        let target_frames = if (target_fps - (meta.fps * 2.0)).abs() < 1.0 {
+            actual_frames * 2
+        } else {
+            ((actual_frames as f64) * (target_fps / meta.fps)).round() as u32
+        }
+        .max(actual_frames + 1);
 
-    if let Some(stderr) = ai_child.stderr.take() {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
+        progress(RenderProgress {
+            stage: format!(
+                "Interpolating motion ({} FPS)...",
+                target_fps.round() as u32
+            ),
+            percent: 10.0,
+            current_frame: 0,
+            total_frames: target_frames,
+            fps: 0.0,
+            eta_seconds: (target_frames as f64 / 20.0) as u32,
+        });
+
+        let mut ai_child = Command::new(&rife_runner)
+            .args([
+                "-i",
+                frames_in_dir.to_str().unwrap(),
+                "-o",
+                frames_out_dir.to_str().unwrap(),
+                "-n",
+                &target_frames.to_string(),
+                "-m",
+                rife_model_dir.to_str().unwrap(),
+                "-f",
+                "%08d.jpg",
+                "-j",
+                "2:2:2",
+            ])
+            .spawn()
+            .map_err(|e| format!("Failed to spawn RIFE runner: {}", e))?;
+
+        let start_time = Instant::now();
+        let mut last_progress_pct = 10.0;
+
+        loop {
             if cancel_flag.load(Ordering::Relaxed) {
                 let _ = ai_child.kill();
                 let _ = fs::remove_dir_all(&temp_dir);
                 return Err("Upscale cancelled by user".to_string());
             }
 
-            let completed = fs::read_dir(&frames_out_dir)
-                .map(|r| r.count() as u32)
-                .unwrap_or(0);
+            match ai_child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        let _ = fs::remove_dir_all(&temp_dir);
+                        return Err("RIFE frame interpolation encountered an error".to_string());
+                    }
+                    break;
+                }
+                Ok(None) => {
+                    let completed = fs::read_dir(&frames_out_dir)
+                        .map(|r| r.count() as u32)
+                        .unwrap_or(0);
+                    let overall_pct =
+                        (10.0 + (completed as f64 / target_frames as f64) * 82.0).min(92.0);
+                    if overall_pct > last_progress_pct {
+                        last_progress_pct = overall_pct;
+                    }
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    let fps = if elapsed > 0.5 {
+                        completed as f64 / elapsed
+                    } else {
+                        0.0
+                    };
+                    let eta = if fps > 0.1 && completed < target_frames {
+                        ((target_frames - completed) as f64 / fps) as u32
+                    } else {
+                        0
+                    };
 
-            let pct_in_frame = if line.contains('%') {
-                line.split('%')
-                    .next()
-                    .and_then(|s| s.split_whitespace().last())
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            };
+                    progress(RenderProgress {
+                        stage: format!(
+                            "Interpolating motion ({} FPS)...",
+                            target_fps.round() as u32
+                        ),
+                        percent: last_progress_pct,
+                        current_frame: completed.min(target_frames),
+                        total_frames: target_frames,
+                        fps,
+                        eta_seconds: eta,
+                    });
 
-            let frame_progress =
-                (completed as f64 + (pct_in_frame / 100.0)).min(actual_frames as f64);
-            let calculated_pct = 10.0 + (frame_progress / actual_frames as f64) * 82.0;
-            let overall_pct = calculated_pct.max(last_progress_pct);
-            last_progress_pct = overall_pct;
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) => {
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Err(format!("Error monitoring RIFE: {}", e));
+                }
+            }
+        }
+    } else {
+        // Stage 2: Run Real-ESRGAN on Apple GPU with live progress parsing
+        progress(RenderProgress {
+            stage: "Upscaling frames...".to_string(),
+            percent: 10.0,
+            current_frame: 0,
+            total_frames: actual_frames,
+            fps: 0.0,
+            eta_seconds: (actual_frames as f64 / 2.0) as u32,
+        });
 
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let fps = if elapsed > 1.0 {
-                completed as f64 / elapsed
-            } else {
-                0.0
-            };
-            let eta = if fps > 0.1 && completed < actual_frames {
-                ((actual_frames - completed) as f64 / fps) as u32
-            } else {
-                0
-            };
+        let runner = bin_dir.join("realesrgan-ncnn-vulkan");
+        let models_dir = bin_dir.join("models");
+        let model_name = resolve_model_for_preset(preset);
 
-            progress(RenderProgress {
-                stage: "Upscaling frames...".to_string(),
-                percent: overall_pct,
-                current_frame: completed.min(actual_frames),
-                total_frames: actual_frames,
-                fps,
-                eta_seconds: eta,
-            });
+        let mut ai_child = Command::new(&runner)
+            .args([
+                "-i",
+                frames_in_dir.to_str().unwrap(),
+                "-o",
+                frames_out_dir.to_str().unwrap(),
+                "-s",
+                "4",
+                "-m",
+                models_dir.to_str().unwrap(),
+                "-n",
+                model_name,
+                "-j",
+                "2:2:2",
+                "-f",
+                "jpg",
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
+
+        let start_time = Instant::now();
+        let mut last_progress_pct = 10.0;
+
+        if let Some(stderr) = ai_child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    let _ = ai_child.kill();
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Err("Upscale cancelled by user".to_string());
+                }
+
+                let completed = fs::read_dir(&frames_out_dir)
+                    .map(|r| r.count() as u32)
+                    .unwrap_or(0);
+
+                let pct_in_frame = if line.contains('%') {
+                    line.split('%')
+                        .next()
+                        .and_then(|s| s.split_whitespace().last())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+
+                let frame_progress =
+                    (completed as f64 + (pct_in_frame / 100.0)).min(actual_frames as f64);
+                let calculated_pct = 10.0 + (frame_progress / actual_frames as f64) * 82.0;
+                let overall_pct = calculated_pct.max(last_progress_pct);
+                last_progress_pct = overall_pct;
+
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let fps = if elapsed > 1.0 {
+                    completed as f64 / elapsed
+                } else {
+                    0.0
+                };
+                let eta = if fps > 0.1 && completed < actual_frames {
+                    ((actual_frames - completed) as f64 / fps) as u32
+                } else {
+                    0
+                };
+
+                progress(RenderProgress {
+                    stage: "Upscaling frames...".to_string(),
+                    percent: overall_pct,
+                    current_frame: completed.min(actual_frames),
+                    total_frames: actual_frames,
+                    fps,
+                    eta_seconds: eta,
+                });
+            }
+        }
+
+        let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
+        if !ai_status.success() {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err("AI upscaling process failed".to_string());
         }
     }
 
-    let ai_status = ai_child.wait().map_err(|e| e.to_string())?;
-    if !ai_status.success() {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err("AI upscaling process failed".to_string());
-    }
-
     // Stage 3: Hardware encode back to MP4 with original audio stream remuxed
+    let total_out_frames = fs::read_dir(&frames_out_dir)
+        .map(|r| r.count() as u32)
+        .unwrap_or(actual_frames);
+
     progress(RenderProgress {
         stage: "Encoding video...".to_string(),
         percent: 94.0,
-        current_frame: actual_frames,
-        total_frames: actual_frames,
+        current_frame: total_out_frames,
+        total_frames: total_out_frames,
         fps: 40.0,
         eta_seconds: 2,
     });
 
     let scale_multiplier = if scale == 4 { 4 } else { 2 };
-    let output_width = ((meta.width * scale_multiplier) / 2) * 2;
-    let output_height = ((meta.height * scale_multiplier) / 2) * 2;
+    let output_width = if is_fps60 {
+        meta.width
+    } else {
+        ((meta.width * scale_multiplier) / 2) * 2
+    };
+    let output_height = if is_fps60 {
+        meta.height
+    } else {
+        ((meta.height * scale_multiplier) / 2) * 2
+    };
 
-    let out_pattern = frames_out_dir.join("frame_%06d.jpg");
-    let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
+    let out_pattern = if is_fps60 {
+        frames_out_dir.join("%08d.jpg")
+    } else {
+        frames_out_dir.join("frame_%06d.jpg")
+    };
 
     let mut encode_cmd = Command::new("ffmpeg");
     encode_cmd.args([
@@ -706,8 +982,8 @@ where
         "1:a?", // copy audio if stream exists
     ]);
 
-    // If 2x was chosen, downscale native 4x neural output via high-quality Lanczos supersampling
-    if scale == 2 {
+    // If 2x was chosen on spatial models, downscale native 4x neural output via Lanczos supersampling
+    if !is_fps60 && scale == 2 {
         encode_cmd.args([
             "-vf",
             &format!("scale={}:{}:flags=lanczos", output_width, output_height),
@@ -742,10 +1018,14 @@ where
     let _ = fs::remove_dir_all(&temp_dir);
 
     progress(RenderProgress {
-        stage: "Upscale Complete!".to_string(),
+        stage: if is_fps60 {
+            "Motion Smoothing Complete!".to_string()
+        } else {
+            "Upscale Complete!".to_string()
+        },
         percent: 100.0,
-        current_frame: actual_frames,
-        total_frames: actual_frames,
+        current_frame: total_out_frames,
+        total_frames: total_out_frames,
         fps: 0.0,
         eta_seconds: 0,
     });
@@ -790,10 +1070,10 @@ mod tests {
             PathBuf::from("/path/to/my_video_dereel_anime_4x.mp4")
         );
 
-        let out_fps60 = compute_output_path("/path/to/my_video.mp4", "", Some("fps60"), 2);
+        let out_fps60 = compute_output_path("/path/to/my_video.mp4", "", Some("fps60"), 60);
         assert_eq!(
             out_fps60,
-            PathBuf::from("/path/to/my_video_dereel_60fps_2x.mp4")
+            PathBuf::from("/path/to/my_video_dereel_60fps.mp4")
         );
 
         let out_custom = compute_output_path(
@@ -819,10 +1099,7 @@ mod tests {
             resolve_model_for_preset(Some("vhs")),
             "realesr-general-x4v3"
         );
-        assert_eq!(
-            resolve_model_for_preset(Some("fps60")),
-            "realesr-general-x4v3"
-        );
+        assert_eq!(resolve_model_for_preset(Some("fps60")), "rife-v4.6");
         assert_eq!(resolve_model_for_preset(None), "realesr-general-x4v3");
     }
 }
