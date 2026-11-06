@@ -2,6 +2,8 @@ import React from "react";
 import { Film, Smartphone, Zap, Sparkles } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Preset, PresetId } from "../types";
+import logoIcon from "../assets/logo-icon-ui.png";
+import logoWordmark from "../assets/logo-wordmark-ui.png";
 
 export const PRESETS: Preset[] = [
   {
@@ -78,8 +80,17 @@ export const PresetSidebar: React.FC<PresetSidebarProps> = ({
         onMouseDown={handleDrag}
         className="pt-7 px-1 flex items-center justify-between"
       >
-        <div className="flex items-center space-x-2">
-          <span className="font-semibold text-xs tracking-tight text-zinc-200">DeReel</span>
+        <div className="flex items-center space-x-2.5">
+          <img
+            src={logoIcon}
+            alt="DeReel Icon"
+            className="w-5 h-5 rounded-[5px] shadow-sm select-none pointer-events-none"
+          />
+          <img
+            src={logoWordmark}
+            alt="DeReel"
+            className="h-3.5 w-auto object-contain select-none pointer-events-none"
+          />
         </div>
       </div>
 

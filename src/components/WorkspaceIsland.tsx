@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Upload,
   Play,
   Pause,
   ArrowRight,
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "../types";
+import logoIcon from "../assets/logo-icon-ui.png";
 
 interface WorkspaceIslandProps {
   activePresetId: PresetId;
@@ -343,8 +343,12 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                 : "border-transparent hover:border-white/[0.06] hover:bg-white/[0.02]"
             }`}
           >
-            <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-zinc-400 mb-4 shadow-sm">
-              <Upload className="w-5 h-5 text-zinc-300" />
+            <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-center p-2 mb-4 shadow-xl">
+              <img
+                src={logoIcon}
+                alt="DeReel"
+                className="w-full h-full object-contain rounded-xl select-none pointer-events-none drop-shadow"
+              />
             </div>
 
             <div className="text-sm font-medium text-zinc-200 mb-1">

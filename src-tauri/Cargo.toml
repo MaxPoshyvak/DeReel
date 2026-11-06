@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "Open-source, 100% private AI video restoration & upscaling"
 authors = ["Max Poshyvak"]
 edition = "2021"
+default-run = "DeReel"
+
+[[bin]]
+name = "DeReel"
+path = "src/main.rs"
 
 [lib]
 name = "dereel_lib"
