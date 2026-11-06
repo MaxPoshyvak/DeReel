@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { PresetSidebar, PRESETS } from "./components/PresetSidebar";
 import { WorkspaceIsland } from "./components/WorkspaceIsland";
 import { ProgressModal } from "./components/ProgressModal";
+import { AdviceModal, AdviceType } from "./components/AdviceModal";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata, RenderProgressPayload } from "./types";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -34,6 +35,20 @@ export default function App() {
   const [renderError, setRenderError] = useState<string | null>(null);
   const [isUpscaling, setIsUpscaling] = useState<boolean>(false);
   const [chipName, setChipName] = useState<string>("Apple Silicon");
+
+  // Smart Advisory Modal states
+  const [adviceModal, setAdviceModal] = useState<{
+    isOpen: boolean;
+    type: AdviceType | null;
+  }>({
+    isOpen: false,
+    type: null,
+  });
+
+  const activePresetIdRef = useRef<PresetId>(activePresetId);
+  useEffect(() => {
+    activePresetIdRef.current = activePresetId;
+  }, [activePresetId]);
 
   useEffect(() => {
     invoke<{ chip_name: string }>("get_system_capabilities")
@@ -68,6 +83,10 @@ export default function App() {
       setCurrentTime(0.0);
       setPreviewMedia(null);
       setIsPlaying(true);
+
+      if (activePresetIdRef.current === "lowres" && (meta.height >= 720 || meta.width >= 1280)) {
+        setAdviceModal({ isOpen: true, type: "hd_video_on_lowres" });
+      }
     } catch (err) {
       console.warn("Probe video failed:", err);
       const name = filePath.split("/").pop() || "video.mp4";
@@ -357,14 +376,42 @@ export default function App() {
     }
   };
 
-  const handleSelectPreset = useCallback((id: PresetId) => {
-    setActivePresetId(id);
-    if (id === "vhs") {
+  const handleConfirmAdvice = useCallback(() => {
+    if (adviceModal.type === "hd_video_on_lowres") {
+      setActivePresetId("vhs");
       setSettings((prev) => ({ ...prev, deinterlace: true }));
-    } else {
-      setSettings((prev) => ({ ...prev, deinterlace: false }));
+    } else if (adviceModal.type === "lowres_4x_warning") {
+      setSettings((prev) => ({ ...prev, scaleFactor: 2 }));
     }
-  }, []);
+    setAdviceModal({ isOpen: false, type: null });
+  }, [adviceModal.type]);
+
+  const handleDismissAdvice = useCallback(() => {
+    if (adviceModal.type === "lowres_4x_warning") {
+      setSettings((prev) => ({ ...prev, scaleFactor: 4 }));
+    }
+    setAdviceModal({ isOpen: false, type: null });
+  }, [adviceModal.type]);
+
+  const handleSelectPreset = useCallback(
+    (id: PresetId) => {
+      setActivePresetId(id);
+      if (id === "vhs") {
+        setSettings((prev) => ({ ...prev, deinterlace: true }));
+      } else {
+        setSettings((prev) => ({ ...prev, deinterlace: false }));
+      }
+
+      if (id === "lowres") {
+        if (video && (video.height >= 720 || video.width >= 1280)) {
+          setAdviceModal({ isOpen: true, type: "hd_video_on_lowres" });
+        } else if (settings.scaleFactor === 4) {
+          setAdviceModal({ isOpen: true, type: "lowres_4x_warning" });
+        }
+      }
+    },
+    [video, settings.scaleFactor]
+  );
 
   return (
     <div
@@ -390,7 +437,13 @@ export default function App() {
           setIsPlaying(false);
         }}
         settings={settings}
-        onChangeSettings={(newSt) => setSettings((prev) => ({ ...prev, ...newSt }))}
+        onChangeSettings={(newSt) => {
+          if (newSt.scaleFactor === 4 && activePresetId === "lowres" && settings.scaleFactor !== 4) {
+            setAdviceModal({ isOpen: true, type: "lowres_4x_warning" });
+          } else {
+            setSettings((prev) => ({ ...prev, ...newSt }));
+          }
+        }}
         sliderPos={sliderPos}
         onChangeSliderPos={setSliderPos}
         currentTime={currentTime}
@@ -432,6 +485,16 @@ export default function App() {
             setRenderError(null);
           }
         }}
+      />
+
+      {/* Smart Advisory Modal */}
+      <AdviceModal
+        isOpen={adviceModal.isOpen}
+        type={adviceModal.type}
+        videoWidth={video?.width}
+        videoHeight={video?.height}
+        onConfirm={handleConfirmAdvice}
+        onDismiss={handleDismissAdvice}
       />
     </div>
   );
