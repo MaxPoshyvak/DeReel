@@ -3,7 +3,7 @@
   "productName": "DeReel",
   "mainBinaryName": "DeReel",
   "version": "0.1.0",
-  "identifier": "com.dereel.app",
+  "identifier": "com.dereel.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
