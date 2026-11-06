@@ -13,9 +13,9 @@ export const PRESETS: Preset[] = [
   {
     id: "lowres",
     title: "Old Phone / Low-Res",
-    subtitle: "Deblock compression • 2x/4x",
-    badge: "SPAN",
-    models: ["realesr-general-x4v3"]
+    subtitle: "Deblock compression • Sharp detail",
+    badge: "x4plus",
+    models: ["realesrgan-x4plus"]
   },
   {
     id: "fps60",

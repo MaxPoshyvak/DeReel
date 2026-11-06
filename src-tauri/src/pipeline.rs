@@ -178,6 +178,38 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
     })
 }
 
+pub fn resolve_model_and_preset_label(preset: Option<&str>) -> (&'static str, &'static str) {
+    match preset.unwrap_or("vhs") {
+        "anime" => ("realesr-animevideov3", "Cartoons & Anime"),
+        "lowres" => ("realesrgan-x4plus", "Old Phone / Low-Res"),
+        "fps60" => ("realesr-general-x4v3", "Smooth 60 FPS"),
+        "vhs" => ("realesr-general-x4v3", "VHS & Home Video"),
+        _ => ("realesr-general-x4v3", "AI Restoration"),
+    }
+}
+
+pub fn compute_output_path(
+    input_path: &str,
+    output_path: &str,
+    preset: Option<&str>,
+    scale: u32,
+) -> PathBuf {
+    if !output_path.is_empty() {
+        return PathBuf::from(output_path);
+    }
+    let in_p = Path::new(input_path);
+    let stem = in_p.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+    let parent = in_p.parent().unwrap_or_else(|| Path::new("."));
+    let preset_slug = match preset.unwrap_or("vhs") {
+        "vhs" => "vhs",
+        "lowres" => "lowres",
+        "fps60" => "60fps",
+        "anime" => "anime",
+        other => other,
+    };
+    parent.join(format!("{}_dereel_{}_{}x.mp4", stem, preset_slug, scale))
+}
+
 pub fn execute_preview_pipeline<F>(
     input_path: &str,
     start_sec: f64,
@@ -309,10 +341,7 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
-    let model_name = match preset.unwrap_or("vhs") {
-        "anime" => "realesr-animevideov3",
-        _ => "realesr-general-x4v3",
-    };
+    let (model_name, preset_label) = resolve_model_and_preset_label(preset);
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -381,7 +410,10 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!("AI Upscaling on {} GPU — {:.0}%", chip, overall_pct),
+                stage: format!(
+                    "AI Upscaling ({}) on {} GPU — {:.0}%",
+                    preset_label, chip, overall_pct
+                ),
                 percent: overall_pct,
                 current_frame: completed.min(frame_count),
                 total_frames: frame_count,
@@ -472,15 +504,7 @@ where
     F: Fn(RenderProgress) + Send + Sync + 'static,
 {
     let meta = probe_video_file(input_path)?;
-
-    let in_p = Path::new(input_path);
-    let final_dest = if output_path.is_empty() {
-        let stem = in_p.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
-        let parent = in_p.parent().unwrap_or_else(|| Path::new("."));
-        parent.join(format!("{}_dereel_{}x.mp4", stem, scale))
-    } else {
-        PathBuf::from(output_path)
-    };
+    let final_dest = compute_output_path(input_path, output_path, preset, scale);
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -556,10 +580,7 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
-    let model_name = match preset.unwrap_or("vhs") {
-        "anime" => "realesr-animevideov3",
-        _ => "realesr-general-x4v3",
-    };
+    let (model_name, preset_label) = resolve_model_and_preset_label(preset);
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -628,7 +649,10 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!("AI Upscaling on {} GPU — {:.0}%", chip, overall_pct),
+                stage: format!(
+                    "AI Upscaling ({}) on {} GPU — {:.0}%",
+                    preset_label, chip, overall_pct
+                ),
                 percent: overall_pct,
                 current_frame: completed.min(actual_frames),
                 total_frames: actual_frames,
@@ -721,5 +745,59 @@ mod tests {
             assert_eq!(meta.height, 480);
             assert!(meta.duration > 0.0);
         }
+    }
+
+    #[test]
+    fn test_compute_output_path() {
+        let out_lowres = compute_output_path("/path/to/my_video.mp4", "", Some("lowres"), 4);
+        assert_eq!(
+            out_lowres,
+            PathBuf::from("/path/to/my_video_dereel_lowres_4x.mp4")
+        );
+
+        let out_vhs = compute_output_path("/path/to/my_video.mov", "", Some("vhs"), 2);
+        assert_eq!(
+            out_vhs,
+            PathBuf::from("/path/to/my_video_dereel_vhs_2x.mp4")
+        );
+
+        let out_anime = compute_output_path("/path/to/my_video.mp4", "", Some("anime"), 4);
+        assert_eq!(
+            out_anime,
+            PathBuf::from("/path/to/my_video_dereel_anime_4x.mp4")
+        );
+
+        let out_fps60 = compute_output_path("/path/to/my_video.mp4", "", Some("fps60"), 2);
+        assert_eq!(
+            out_fps60,
+            PathBuf::from("/path/to/my_video_dereel_60fps_2x.mp4")
+        );
+
+        let out_custom = compute_output_path(
+            "/path/to/my_video.mp4",
+            "/custom/dest.mp4",
+            Some("anime"),
+            4,
+        );
+        assert_eq!(out_custom, PathBuf::from("/custom/dest.mp4"));
+    }
+
+    #[test]
+    fn test_resolve_model_and_preset_label() {
+        let (model, label) = resolve_model_and_preset_label(Some("lowres"));
+        assert_eq!(model, "realesrgan-x4plus");
+        assert_eq!(label, "Old Phone / Low-Res");
+
+        let (model, label) = resolve_model_and_preset_label(Some("anime"));
+        assert_eq!(model, "realesr-animevideov3");
+        assert_eq!(label, "Cartoons & Anime");
+
+        let (model, label) = resolve_model_and_preset_label(Some("vhs"));
+        assert_eq!(model, "realesr-general-x4v3");
+        assert_eq!(label, "VHS & Home Video");
+
+        let (model, label) = resolve_model_and_preset_label(Some("fps60"));
+        assert_eq!(model, "realesr-general-x4v3");
+        assert_eq!(label, "Smooth 60 FPS");
     }
 }

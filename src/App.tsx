@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { PresetSidebar } from "./components/PresetSidebar";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { PresetSidebar, PRESETS } from "./components/PresetSidebar";
 import { WorkspaceIsland } from "./components/WorkspaceIsland";
 import { ProgressModal } from "./components/ProgressModal";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata, RenderProgressPayload } from "./types";
@@ -9,6 +9,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 export default function App() {
   const [activePresetId, setActivePresetId] = useState<PresetId>("vhs");
+  const activePreset = useMemo(
+    () => PRESETS.find((p) => p.id === activePresetId) || PRESETS[0],
+    [activePresetId]
+  );
   const [settings, setSettings] = useState<PresetSettings>({
     scaleFactor: 2,
     faceRestore: true,
@@ -394,6 +398,7 @@ export default function App() {
         isUpscaling={isUpscaling}
         onStartUpscale={handleStartUpscale}
         completedPath={completedPath}
+        activePreset={activePreset}
         onOpenFinder={handleOpenFinder}
         onUseUpscaledAsSource={handleUseUpscaledAsSource}
       />
@@ -405,6 +410,7 @@ export default function App() {
         progress={progress}
         completedPath={completedPath}
         error={renderError}
+        activePreset={activePreset}
         onCancel={handleCancel}
         onOpenFinder={handleOpenFinder}
         onCompareResult={handleCompareResult}

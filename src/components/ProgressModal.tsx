@@ -1,6 +1,6 @@
 import React from "react";
 import { CheckCircle2, FolderOpen, X, AlertCircle, Sparkles } from "lucide-react";
-import { RenderProgressPayload } from "../types";
+import { RenderProgressPayload, Preset } from "../types";
 
 interface ProgressModalProps {
   isOpen: boolean;
@@ -8,6 +8,7 @@ interface ProgressModalProps {
   progress: RenderProgressPayload | null;
   completedPath: string | null;
   error: string | null;
+  activePreset?: Preset;
   onCancel: () => void;
   onOpenFinder: (path: string) => void;
   onClose: () => void;
@@ -20,6 +21,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
   progress,
   completedPath,
   error,
+  activePreset,
   onCancel,
   onOpenFinder,
   onClose,
@@ -58,16 +60,24 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
             )}
 
             <div>
-              <h3 className="text-sm font-semibold text-zinc-100">
-                {isDone
-                  ? isFullUpscale
-                    ? "Full Upscale Completed"
-                    : "3s Preview Ready"
-                  : error
-                  ? "Operation Encountered an Error"
-                  : isFullUpscale
-                  ? "Upscaling Full Video"
-                  : "Rendering 3s Preview"}
+              <h3 className="text-sm font-semibold text-zinc-100 flex items-center space-x-1.5 flex-wrap">
+                <span>
+                  {isDone
+                    ? isFullUpscale
+                      ? "Full Upscale Completed"
+                      : "3s Preview Ready"
+                    : error
+                    ? "Operation Encountered an Error"
+                    : isFullUpscale
+                    ? "Upscaling Full Video"
+                    : "Rendering 3s Preview"}
+                </span>
+                {activePreset && (
+                  <>
+                    <span className="text-zinc-600 font-normal">•</span>
+                    <span className="text-sky-400 font-medium">{activePreset.title}</span>
+                  </>
+                )}
               </h3>
               <p className="text-[11px] text-zinc-400 font-mono">
                 {isDone
