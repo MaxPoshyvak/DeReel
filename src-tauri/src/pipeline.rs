@@ -340,9 +340,9 @@ where
     let bin_dir = get_binary_path();
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
-    let scale_str = if scale == 4 { "4" } else { "2" };
     let model_name = resolve_model_for_preset(preset);
 
+    // Run neural model at its native 4x scale to completely avoid ncnn tile-stitching offset bugs
     let mut ai_child = Command::new(&runner)
         .args([
             "-i",
@@ -350,7 +350,7 @@ where
             "-o",
             frames_out_dir.to_str().unwrap(),
             "-s",
-            scale_str,
+            "4",
             "-m",
             models_dir.to_str().unwrap(),
             "-n",
@@ -434,26 +434,43 @@ where
         eta_seconds: 1,
     });
 
+    let scale_multiplier = if scale == 4 { 4 } else { 2 };
+    let output_width = ((meta.width * scale_multiplier) / 2) * 2;
+    let output_height = ((meta.height * scale_multiplier) / 2) * 2;
+
     let out_pattern = frames_out_dir.join("frame_%04d.jpg");
     let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
 
-    let mut encode_run = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-r",
-            &format!("{:.2}", target_fps),
-            "-i",
-            out_pattern.to_str().unwrap(),
-            "-c:v",
-            "h264_videotoolbox",
-            "-tag:v",
-            "avc1",
-            "-b:v",
-            "12M",
-            "-pix_fmt",
-            "yuv420p",
-            enhanced_3s_path.to_str().unwrap(),
-        ])
+    let mut encode_cmd = Command::new("ffmpeg");
+    encode_cmd.args([
+        "-y",
+        "-r",
+        &format!("{:.2}", target_fps),
+        "-i",
+        out_pattern.to_str().unwrap(),
+    ]);
+
+    // If 2x was chosen, downscale native 4x neural output via high-quality Lanczos supersampling
+    if scale == 2 {
+        encode_cmd.args([
+            "-vf",
+            &format!("scale={}:{}:flags=lanczos", output_width, output_height),
+        ]);
+    }
+
+    encode_cmd.args([
+        "-c:v",
+        "h264_videotoolbox",
+        "-tag:v",
+        "avc1",
+        "-b:v",
+        "12M",
+        "-pix_fmt",
+        "yuv420p",
+        enhanced_3s_path.to_str().unwrap(),
+    ]);
+
+    let mut encode_run = encode_cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn encoder: {}", e))?;
 
@@ -462,7 +479,7 @@ where
         return Err("Failed to encode final enhanced video".to_string());
     }
 
-    // Zero-Disk Cleanup
+    // Zero-Disk Cleanup of frame directories
     let _ = fs::remove_dir_all(&frames_in_dir);
     let _ = fs::remove_dir_all(&frames_out_dir);
 
@@ -474,9 +491,6 @@ where
         fps: 0.0,
         eta_seconds: 0,
     });
-
-    let output_width = meta.width * (if scale == 4 { 4 } else { 2 });
-    let output_height = meta.height * (if scale == 4 { 4 } else { 2 });
 
     Ok(PreviewOutput {
         original_path: original_3s_path.to_str().unwrap().to_string(),
@@ -575,9 +589,9 @@ where
     let bin_dir = get_binary_path();
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
-    let scale_str = if scale == 4 { "4" } else { "2" };
     let model_name = resolve_model_for_preset(preset);
 
+    // Run neural model at native 4x scale to avoid ncnn tile-stitching offset bugs
     let mut ai_child = Command::new(&runner)
         .args([
             "-i",
@@ -585,7 +599,7 @@ where
             "-o",
             frames_out_dir.to_str().unwrap(),
             "-s",
-            scale_str,
+            "4",
             "-m",
             models_dir.to_str().unwrap(),
             "-n",
@@ -670,35 +684,52 @@ where
         eta_seconds: 2,
     });
 
+    let scale_multiplier = if scale == 4 { 4 } else { 2 };
+    let output_width = ((meta.width * scale_multiplier) / 2) * 2;
+    let output_height = ((meta.height * scale_multiplier) / 2) * 2;
+
     let out_pattern = frames_out_dir.join("frame_%06d.jpg");
     let target_fps = if meta.fps > 0.0 { meta.fps } else { 29.97 };
 
-    let mut encode_run = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-r",
-            &format!("{:.2}", target_fps),
-            "-i",
-            out_pattern.to_str().unwrap(),
-            "-i",
-            input_path, // input for audio pass-through
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a?", // copy audio if stream exists
-            "-c:v",
-            "h264_videotoolbox",
-            "-tag:v",
-            "avc1",
-            "-b:v",
-            "16M",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "copy",
-            "-shortest",
-            final_dest.to_str().unwrap(),
-        ])
+    let mut encode_cmd = Command::new("ffmpeg");
+    encode_cmd.args([
+        "-y",
+        "-r",
+        &format!("{:.2}", target_fps),
+        "-i",
+        out_pattern.to_str().unwrap(),
+        "-i",
+        input_path, // input for audio pass-through
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?", // copy audio if stream exists
+    ]);
+
+    // If 2x was chosen, downscale native 4x neural output via high-quality Lanczos supersampling
+    if scale == 2 {
+        encode_cmd.args([
+            "-vf",
+            &format!("scale={}:{}:flags=lanczos", output_width, output_height),
+        ]);
+    }
+
+    encode_cmd.args([
+        "-c:v",
+        "h264_videotoolbox",
+        "-tag:v",
+        "avc1",
+        "-b:v",
+        "16M",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-shortest",
+        final_dest.to_str().unwrap(),
+    ]);
+
+    let mut encode_run = encode_cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn encoder: {}", e))?;
 
