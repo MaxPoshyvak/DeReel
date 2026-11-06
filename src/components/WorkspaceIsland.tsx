@@ -13,7 +13,7 @@ import {
   FolderOpen,
   ZoomIn,
 } from "lucide-react";
-import { Preset, PresetSettings, PreviewMedia, VideoMetadata } from "../types";
+import { PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
 interface WorkspaceIslandProps {
   video: VideoMetadata | null;
@@ -36,7 +36,6 @@ interface WorkspaceIslandProps {
   isUpscaling: boolean;
   onStartUpscale: () => void;
   completedPath?: string | null;
-  activePreset?: Preset;
   onOpenFinder?: (path: string) => void;
   onUseUpscaledAsSource?: (path: string) => void;
 }
@@ -62,7 +61,6 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   isUpscaling,
   onStartUpscale,
   completedPath,
-  activePreset,
   onOpenFinder,
   onUseUpscaledAsSource,
 }) => {
@@ -365,14 +363,8 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
             {previewMedia ? (
               /* COMPARISON MODE HEADER: No old filenames or outdated specs */
               <div className="flex items-center space-x-2.5">
-                <span className="px-2.5 py-0.5 rounded-md bg-white/[0.08] text-xs font-semibold text-zinc-200 tracking-tight flex items-center space-x-1.5">
-                  <span>Before / After Comparison</span>
-                  {activePreset && (
-                    <>
-                      <span className="text-zinc-600 font-normal">•</span>
-                      <span className="text-sky-400 font-medium">{activePreset.title}</span>
-                    </>
-                  )}
+                <span className="px-2.5 py-0.5 rounded-md bg-white/[0.08] text-xs font-semibold text-zinc-200 tracking-tight">
+                  Before / After Comparison
                 </span>
 
                 <div className="flex items-center space-x-1.5 font-mono text-[11px] text-zinc-400 bg-white/[0.04] px-2.5 py-0.5 rounded-md border border-white/[0.06]">
@@ -697,12 +689,6 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                 <span className="text-zinc-200 font-medium">
                   {completedPath ? "Full Video AI Restored" : "3s Quick Preview"}
                 </span>
-                {activePreset && (
-                  <>
-                    <span className="text-zinc-600">•</span>
-                    <span className="text-sky-400 font-medium">{activePreset.title} ({settings.scaleFactor}×)</span>
-                  </>
-                )}
                 <span className="text-zinc-600">•</span>
                 <span className="text-zinc-300">
                   {video.width}×{video.height} ➔ {previewMedia.outputWidth}×{previewMedia.outputHeight}
@@ -739,7 +725,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     className="h-10 px-5 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#3B82F6] hover:brightness-110 active:brightness-95 text-white font-semibold text-xs shadow-[0_0_20px_-4px_rgba(56,189,248,0.4)] flex items-center space-x-2 transition-all disabled:opacity-50"
                   >
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    <span>Start Full Upscale • {activePreset?.title || "Default"} ({settings.scaleFactor}×)</span>
+                    <span>Start Full Upscale ({settings.scaleFactor}×)</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -748,17 +734,8 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
           ) : (
             /* SETUP CONTROLS FOR INITIAL WORKSPACE */
             <div className="h-12 flex items-center justify-between gap-4 pt-1 flex-shrink-0 z-20 px-1">
-              {/* Bento Cards */}
+              {/* Minimal Bento Cards */}
               <div className="flex items-center space-x-2">
-                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[100px]">
-                  <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
-                    Active Preset
-                  </div>
-                  <div className="text-[11.5px] font-medium text-sky-400 truncate max-w-[130px]" title={activePreset?.title}>
-                    {activePreset?.title || "VHS & Home Video"}
-                  </div>
-                </div>
-
                 <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[95px]">
                   <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
                     Target Output
@@ -777,12 +754,12 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   </div>
                 </div>
 
-                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[90px]">
+                <div className="px-2.5 py-1 rounded-lg bg-[#18181D] border border-white/[0.07] min-w-[70px]">
                   <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
                     Scale
                   </div>
                   <div className="text-[11.5px] font-mono font-semibold text-zinc-200 tabular-nums">
-                    {settings.scaleFactor}× ({settings.scaleFactor === 4 ? "Ultra HD" : "Full HD"})
+                    {settings.scaleFactor}×
                   </div>
                 </div>
               </div>
@@ -793,7 +770,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   onClick={onRunPreview}
                   disabled={isProcessingPreview || isUpscaling}
                   className="h-10 px-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] active:bg-white/[0.04] text-zinc-300 hover:text-white font-medium text-xs border border-white/[0.08] flex items-center space-x-2 transition-all disabled:opacity-50"
-                  title={`Generate 3-second preview using ${activePreset?.title || "current preset"}`}
+                  title="Generate 3-second before/after comparison"
                 >
                   {isProcessingPreview ? (
                     <RotateCcw className="w-3.5 h-3.5 animate-spin text-zinc-400" />
@@ -816,7 +793,7 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                   ) : (
                     <>
                       <Zap className="w-3.5 h-3.5 fill-current" />
-                      <span>Start Upscale • {activePreset?.title || "Default"} ({settings.scaleFactor}×)</span>
+                      <span>Start Upscale ({settings.scaleFactor}×)</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </>
                   )}

@@ -33,6 +33,15 @@ export default function App() {
   const [completedPath, setCompletedPath] = useState<string | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [isUpscaling, setIsUpscaling] = useState<boolean>(false);
+  const [chipName, setChipName] = useState<string>("Apple Silicon");
+
+  useEffect(() => {
+    invoke<{ chip_name: string }>("get_system_capabilities")
+      .then((caps) => {
+        if (caps?.chip_name) setChipName(caps.chip_name);
+      })
+      .catch(() => {});
+  }, []);
 
   // Listen to live render progress emitted by Rust backend
   useEffect(() => {
@@ -398,7 +407,6 @@ export default function App() {
         isUpscaling={isUpscaling}
         onStartUpscale={handleStartUpscale}
         completedPath={completedPath}
-        activePreset={activePreset}
         onOpenFinder={handleOpenFinder}
         onUseUpscaledAsSource={handleUseUpscaledAsSource}
       />
@@ -411,6 +419,7 @@ export default function App() {
         completedPath={completedPath}
         error={renderError}
         activePreset={activePreset}
+        chipName={chipName}
         onCancel={handleCancel}
         onOpenFinder={handleOpenFinder}
         onCompareResult={handleCompareResult}

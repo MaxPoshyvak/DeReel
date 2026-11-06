@@ -178,13 +178,13 @@ pub fn probe_video_file(path_str: &str) -> Result<VideoMetadata, String> {
     })
 }
 
-pub fn resolve_model_and_preset_label(preset: Option<&str>) -> (&'static str, &'static str) {
+pub fn resolve_model_for_preset(preset: Option<&str>) -> &'static str {
     match preset.unwrap_or("vhs") {
-        "anime" => ("realesr-animevideov3", "Cartoons & Anime"),
-        "lowres" => ("realesrgan-x4plus", "Old Phone / Low-Res"),
-        "fps60" => ("realesr-general-x4v3", "Smooth 60 FPS"),
-        "vhs" => ("realesr-general-x4v3", "VHS & Home Video"),
-        _ => ("realesr-general-x4v3", "AI Restoration"),
+        "anime" => "realesr-animevideov3",
+        "lowres" => "realesrgan-x4plus",
+        "fps60" => "realesr-general-x4v3",
+        "vhs" => "realesr-general-x4v3",
+        _ => "realesr-general-x4v3",
     }
 }
 
@@ -240,7 +240,7 @@ where
 
     // Stage 1: Extract 3s original clip and raw frames
     progress(RenderProgress {
-        stage: "Extracting 3s frames with deinterlacer...".to_string(),
+        stage: "Extracting frames...".to_string(),
         percent: 5.0,
         current_frame: 0,
         total_frames: (3.0 * meta.fps) as u32,
@@ -328,7 +328,7 @@ where
         .max(1);
 
     progress(RenderProgress {
-        stage: "AI Upscaling on Apple Silicon GPU...".to_string(),
+        stage: "Upscaling frames...".to_string(),
         percent: 15.0,
         current_frame: 0,
         total_frames: frame_count,
@@ -341,7 +341,7 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
-    let (model_name, preset_label) = resolve_model_and_preset_label(preset);
+    let model_name = resolve_model_for_preset(preset);
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -364,7 +364,6 @@ where
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
-    let chip = detect_hardware_chip();
     let start_time = Instant::now();
     let mut last_progress_pct = 15.0;
 
@@ -410,10 +409,7 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!(
-                    "AI Upscaling ({}) on {} GPU — {:.0}%",
-                    preset_label, chip, overall_pct
-                ),
+                stage: "Upscaling frames...".to_string(),
                 percent: overall_pct,
                 current_frame: completed.min(frame_count),
                 total_frames: frame_count,
@@ -430,7 +426,7 @@ where
 
     // Stage 3: Encode upscaled frames using hardware VideoToolbox
     progress(RenderProgress {
-        stage: "Encoding VideoToolbox hardware stream...".to_string(),
+        stage: "Encoding video...".to_string(),
         percent: 92.0,
         current_frame: frame_count,
         total_frames: frame_count,
@@ -526,7 +522,7 @@ where
     let total_est_frames = (meta.duration * meta.fps).max(1.0) as u32;
 
     progress(RenderProgress {
-        stage: "Extracting video frames...".to_string(),
+        stage: "Extracting frames...".to_string(),
         percent: 2.0,
         current_frame: 0,
         total_frames: total_est_frames,
@@ -568,7 +564,7 @@ where
         .max(1);
 
     progress(RenderProgress {
-        stage: "AI Super-Resolution on Apple GPU...".to_string(),
+        stage: "Upscaling frames...".to_string(),
         percent: 10.0,
         current_frame: 0,
         total_frames: actual_frames,
@@ -580,7 +576,7 @@ where
     let runner = bin_dir.join("realesrgan-ncnn-vulkan");
     let models_dir = bin_dir.join("models");
     let scale_str = if scale == 4 { "4" } else { "2" };
-    let (model_name, preset_label) = resolve_model_and_preset_label(preset);
+    let model_name = resolve_model_for_preset(preset);
 
     let mut ai_child = Command::new(&runner)
         .args([
@@ -603,7 +599,6 @@ where
         .spawn()
         .map_err(|e| format!("Failed to spawn Real-ESRGAN runner: {}", e))?;
 
-    let chip = detect_hardware_chip();
     let start_time = Instant::now();
     let mut last_progress_pct = 10.0;
 
@@ -649,10 +644,7 @@ where
             };
 
             progress(RenderProgress {
-                stage: format!(
-                    "AI Upscaling ({}) on {} GPU — {:.0}%",
-                    preset_label, chip, overall_pct
-                ),
+                stage: "Upscaling frames...".to_string(),
                 percent: overall_pct,
                 current_frame: completed.min(actual_frames),
                 total_frames: actual_frames,
@@ -670,7 +662,7 @@ where
 
     // Stage 3: Hardware encode back to MP4 with original audio stream remuxed
     progress(RenderProgress {
-        stage: "Encoding VideoToolbox hardware stream...".to_string(),
+        stage: "Encoding video...".to_string(),
         percent: 94.0,
         current_frame: actual_frames,
         total_frames: actual_frames,
@@ -783,21 +775,23 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_model_and_preset_label() {
-        let (model, label) = resolve_model_and_preset_label(Some("lowres"));
-        assert_eq!(model, "realesrgan-x4plus");
-        assert_eq!(label, "Old Phone / Low-Res");
-
-        let (model, label) = resolve_model_and_preset_label(Some("anime"));
-        assert_eq!(model, "realesr-animevideov3");
-        assert_eq!(label, "Cartoons & Anime");
-
-        let (model, label) = resolve_model_and_preset_label(Some("vhs"));
-        assert_eq!(model, "realesr-general-x4v3");
-        assert_eq!(label, "VHS & Home Video");
-
-        let (model, label) = resolve_model_and_preset_label(Some("fps60"));
-        assert_eq!(model, "realesr-general-x4v3");
-        assert_eq!(label, "Smooth 60 FPS");
+    fn test_resolve_model_for_preset() {
+        assert_eq!(
+            resolve_model_for_preset(Some("lowres")),
+            "realesrgan-x4plus"
+        );
+        assert_eq!(
+            resolve_model_for_preset(Some("anime")),
+            "realesr-animevideov3"
+        );
+        assert_eq!(
+            resolve_model_for_preset(Some("vhs")),
+            "realesr-general-x4v3"
+        );
+        assert_eq!(
+            resolve_model_for_preset(Some("fps60")),
+            "realesr-general-x4v3"
+        );
+        assert_eq!(resolve_model_for_preset(None), "realesr-general-x4v3");
     }
 }

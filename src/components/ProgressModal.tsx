@@ -9,6 +9,7 @@ interface ProgressModalProps {
   completedPath: string | null;
   error: string | null;
   activePreset?: Preset;
+  chipName?: string;
   onCancel: () => void;
   onOpenFinder: (path: string) => void;
   onClose: () => void;
@@ -22,6 +23,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
   completedPath,
   error,
   activePreset,
+  chipName = "Apple Silicon",
   onCancel,
   onOpenFinder,
   onClose,
@@ -60,31 +62,25 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
             )}
 
             <div>
-              <h3 className="text-sm font-semibold text-zinc-100 flex items-center space-x-1.5 flex-wrap">
-                <span>
-                  {isDone
-                    ? isFullUpscale
-                      ? "Full Upscale Completed"
-                      : "3s Preview Ready"
-                    : error
-                    ? "Operation Encountered an Error"
-                    : isFullUpscale
-                    ? "Upscaling Full Video"
-                    : "Rendering 3s Preview"}
-                </span>
-                {activePreset && (
-                  <>
-                    <span className="text-zinc-600 font-normal">•</span>
-                    <span className="text-sky-400 font-medium">{activePreset.title}</span>
-                  </>
-                )}
+              <h3 className="text-sm font-semibold text-zinc-100">
+                {isDone
+                  ? isFullUpscale
+                    ? "Upscale Complete"
+                    : "3s Preview Ready"
+                  : error
+                  ? "Upscale Failed"
+                  : isFullUpscale
+                  ? "Upscaling Video"
+                  : "Rendering 3s Preview"}
               </h3>
-              <p className="text-[11px] text-zinc-400 font-mono">
+              <p className="text-[11px] text-zinc-400 font-mono mt-0.5">
                 {isDone
                   ? "Ready to compare Before & After"
                   : error
                   ? error
-                  : progress?.stage || "Processing with Apple GPU..."}
+                  : activePreset
+                  ? `${activePreset.title} • ${chipName}`
+                  : chipName}
               </p>
             </div>
           </div>
@@ -104,7 +100,7 @@ export const ProgressModal: React.FC<ProgressModalProps> = ({
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-zinc-400 text-[11px]">
-                {progress?.stage ? progress.stage.split("—")[0].trim() : "Processing with GPU..."}
+                {progress?.stage || "Processing..."}
               </span>
               <span className="text-[#38BDF8] font-bold text-sm tabular-nums">
                 {percent.toFixed(0)}%
