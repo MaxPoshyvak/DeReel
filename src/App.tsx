@@ -6,6 +6,7 @@ import { AdviceModal, AdviceType } from "./components/AdviceModal";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata, RenderProgressPayload } from "./types";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export default function App() {
@@ -390,13 +391,16 @@ export default function App() {
   }, [handleStartUpscale]);
 
   const handleDrag = (e: React.MouseEvent) => {
-    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, select, video")) {
+    if (
+      e.button === 0 &&
+      !(e.target as HTMLElement).closest(
+        "button, input, a, select, video, [role='button'], .slider-handle, .pro-slider"
+      )
+    ) {
       try {
-        import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().startDragging();
-        });
-      } catch {
-        // Ignored in browser mode
+        getCurrentWindow().startDragging();
+      } catch (err) {
+        console.warn("Drag error:", err);
       }
     }
   };

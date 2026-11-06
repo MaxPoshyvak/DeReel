@@ -13,6 +13,7 @@ import {
   FolderOpen,
   ZoomIn,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PresetId, PresetSettings, PreviewMedia, VideoMetadata } from "../types";
 
 interface WorkspaceIslandProps {
@@ -297,13 +298,16 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   };
 
   const handleDrag = (e: React.MouseEvent) => {
-    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, video")) {
+    if (
+      e.button === 0 &&
+      !(e.target as HTMLElement).closest(
+        "button, input, a, select, video, [role='button'], .slider-handle, .pro-slider"
+      )
+    ) {
       try {
-        import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().startDragging();
-        });
-      } catch {
-        // Ignored in browser mode
+        getCurrentWindow().startDragging();
+      } catch (err) {
+        console.warn("Drag error:", err);
       }
     }
   };

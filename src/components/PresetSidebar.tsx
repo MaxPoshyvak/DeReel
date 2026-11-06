@@ -1,5 +1,6 @@
 import React from "react";
 import { Film, Smartphone, Zap, Sparkles } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Preset, PresetId } from "../types";
 
 export const PRESETS: Preset[] = [
@@ -43,13 +44,11 @@ export const PresetSidebar: React.FC<PresetSidebarProps> = ({
   onSelectPreset
 }) => {
   const handleDrag = (e: React.MouseEvent) => {
-    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a")) {
+    if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, a, [role='button']")) {
       try {
-        import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          getCurrentWindow().startDragging();
-        });
-      } catch {
-        // Ignored in browser mode
+        getCurrentWindow().startDragging();
+      } catch (err) {
+        console.warn("Drag error:", err);
       }
     }
   };
