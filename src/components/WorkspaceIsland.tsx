@@ -40,6 +40,9 @@ interface WorkspaceIslandProps {
   completedPath?: string | null;
   onOpenFinder?: (path: string) => void;
   onUseUpscaledAsSource?: (path: string) => void;
+  exportDir?: string | null;
+  onSelectExportDir?: () => void;
+  onResetExportDir?: () => void;
 }
 
 export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
@@ -66,6 +69,9 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
   completedPath,
   onOpenFinder,
   onUseUpscaledAsSource,
+  exportDir,
+  onSelectExportDir,
+  onResetExportDir,
 }) => {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -832,6 +838,44 @@ export const WorkspaceIsland: React.FC<WorkspaceIslandProps> = ({
                     {isFps60 ? "RIFE v4.6" : `${settings.scaleFactor}×`}
                   </div>
                 </div>
+
+                {/* Export Destination Selector */}
+                {onSelectExportDir && (
+                  <button
+                    type="button"
+                    onClick={onSelectExportDir}
+                    className="px-2.5 py-1 rounded-lg bg-[#18181D] hover:bg-[#202027] border border-white/[0.07] hover:border-white/[0.14] text-left transition-all group flex items-center space-x-1.5 min-w-[95px]"
+                    title={
+                      exportDir
+                        ? `Save to: ${exportDir} (Click to change)`
+                        : "Save to same folder as input video (Click to change)"
+                    }
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-zinc-400 group-hover:text-sky-400 transition-colors flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[9px] font-mono text-zinc-500 uppercase tracking-wider">
+                        Export To
+                      </div>
+                      <div className="text-[11.5px] font-mono font-semibold text-zinc-300 truncate max-w-[110px]">
+                        {exportDir
+                          ? exportDir.split("/").filter(Boolean).pop() || "Folder"
+                          : "Same folder"}
+                      </div>
+                    </div>
+                    {exportDir && onResetExportDir && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onResetExportDir();
+                        }}
+                        className="p-0.5 rounded hover:bg-white/[0.1] text-zinc-500 hover:text-zinc-200 ml-1 flex-shrink-0"
+                        title="Reset to same folder"
+                      >
+                        <X className="w-3 h-3" />
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
 
               {/* Actions: 3s Quick Preview + Primary Start Upscale Button */}

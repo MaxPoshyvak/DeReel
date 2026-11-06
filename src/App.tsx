@@ -45,6 +45,32 @@ export default function App() {
   const [isUpscaling, setIsUpscaling] = useState<boolean>(false);
   const [chipName, setChipName] = useState<string>("Apple Silicon");
 
+  // Custom export directory (persisted in localStorage, null = same as source)
+  const [exportDir, setExportDir] = useState<string | null>(() => {
+    return localStorage.getItem("dereel_export_dir") || null;
+  });
+
+  const handleSelectExportDir = useCallback(async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Export Folder",
+      });
+      if (selected && typeof selected === "string") {
+        setExportDir(selected);
+        localStorage.setItem("dereel_export_dir", selected);
+      }
+    } catch (err) {
+      console.warn("Folder picker error:", err);
+    }
+  }, []);
+
+  const handleResetExportDir = useCallback(() => {
+    setExportDir(null);
+    localStorage.removeItem("dereel_export_dir");
+  }, []);
+
   // Smart Advisory Modal states
   const [adviceModal, setAdviceModal] = useState<{
     isOpen: boolean;
@@ -293,7 +319,7 @@ export default function App() {
       const scale = settings.scaleFactor;
       const res = await invoke<string>("upscale_video", {
         inputPath: video.path,
-        outputPath: "",
+        outputPath: exportDir || "",
         scale,
         deinterlace: settings.deinterlace,
         preset: activePresetId,
@@ -323,6 +349,7 @@ export default function App() {
     settings,
     activePresetId,
     computedTargetFps,
+    exportDir,
   ]);
 
   // Open Before/After Comparison view for upscaled video
@@ -492,6 +519,9 @@ export default function App() {
         completedPath={completedPath}
         onOpenFinder={handleOpenFinder}
         onUseUpscaledAsSource={handleUseUpscaledAsSource}
+        exportDir={exportDir}
+        onSelectExportDir={handleSelectExportDir}
+        onResetExportDir={handleResetExportDir}
       />
 
       {/* Real-time Progress HUD / Modal */}

@@ -195,6 +195,23 @@ pub fn compute_output_path(
     scale: u32,
 ) -> PathBuf {
     if !output_path.is_empty() {
+        let p = Path::new(output_path);
+        if p.is_dir() || output_path.ends_with('/') || output_path.ends_with('\\') {
+            let in_p = Path::new(input_path);
+            let stem = in_p.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+            let preset_slug = match preset.unwrap_or("vhs") {
+                "vhs" => "vhs",
+                "lowres" => "lowres",
+                "fps60" => "60fps",
+                "anime" => "anime",
+                other => other,
+            };
+            if preset_slug == "60fps" {
+                return p.join(format!("{}_dereel_{}fps.mp4", stem, scale));
+            } else {
+                return p.join(format!("{}_dereel_{}_{}x.mp4", stem, preset_slug, scale));
+            }
+        }
         return PathBuf::from(output_path);
     }
     let in_p = Path::new(input_path);
@@ -1083,6 +1100,12 @@ mod tests {
             4,
         );
         assert_eq!(out_custom, PathBuf::from("/custom/dest.mp4"));
+
+        let out_dir = compute_output_path("/path/to/my_video.mp4", "/custom/dir/", Some("vhs"), 2);
+        assert_eq!(
+            out_dir,
+            PathBuf::from("/custom/dir/my_video_dereel_vhs_2x.mp4")
+        );
     }
 
     #[test]
